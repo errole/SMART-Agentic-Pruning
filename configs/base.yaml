@@ -1,0 +1,190 @@
+# =============================================================================
+# CAP-Prune - main experiment configuration (Qwen3-1.7B on one RTX 5090, 32 GB)
+#
+# Paper-faithful defaults come from Kodathala & Vunnam (2026, arXiv:2601.09694):
+#   128 C4 calibration windows x 2048 tokens, 16 activation / 8 gradient samples,
+#   gradients every 3rd iteration, 32 PPL samples, tau = 15 %, increments in
+#   [0.01, 0.15], controller temperature 0.5, 5-shot MMLU, FreebaseQA, WikiText-2.
+#
+# Thresholds marked (TUNE) must be fixed on the development split BEFORE you
+# look at any final-split result.
+# =============================================================================
+
+experiment:
+  name: cap-prune-qwen3-1.7b
+  # Keep runs OUTSIDE OneDrive: sync clients lock files mid-write and fight with
+  # SQLite/checkpoint renames. ~ expands to C:\Users\<you> on Windows.
+  runs_dir: ~/cap-prune-runs/unstructured
+  data_dir: ~/cap-prune-runs/data
+
+model:
+  name_or_path: Qwen/Qwen3-1.7B
+  revision: null            # pin a commit hash for reproducibility, e.g. "70d244c..."
+  dtype: bfloat16
+  device: cuda
+  attn_implementation: sdpa
+  max_seq_len: 2048         # pruning-time probes
+
+pruning:
+  mode: unstructured        # unstructured | nm | structured   (see qwen3_*_nm.yaml / *_structured.yaml)
+  eligible: [q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj]
+  max_unit_sparsity: 0.9    # unstructured per-unit cap
+  sensitivity_percentile: 10
+  nm: {n: 2, m: 4}
+  structured: {channel_multiple: 64, max_unit_sparsity: 0.875}
+
+data:
+  source: real              # real | synthetic (smoke tests only)
+  seed: 1234                # fixes the probe/final split for ALL runs (paired comparisons)
+  calibration:
+    dataset: allenai/c4
+    file: en/c4-train.00000-of-01024.json.gz
+    revision: null
+    pool_size: 256          # each run seed draws num_samples windows from this pool
+    num_samples: 128
+    seq_len: 2048
+  ppl_gate:                 # pruning-time perplexity (rollback rule) - disjoint from calibration
+    dataset: allenai/c4
+    file: en/c4-validation.00000-of-00008.json.gz
+    num_samples: 32
+    seq_len: 2048
+  wikitext: {dataset: Salesforce/wikitext, config: wikitext-2-raw-v1, seq_len: 2048}
+  mmlu: {dataset: cais/mmlu, revision: null, probe_fraction: 0.4}
+  freebaseqa: {split: eval, max_questions: null, shots: 5}
+
+profiling:
+  activation_samples: 16
+  gradient_samples: 8
+  gradient_every: 3
+  activation_batch_size: 4
+
+search:
+  max_iterations: 40        # identical for every search method (matched controller/search budget)
+  min_increment: 0.01
+  max_increment: 0.15
+  target_tolerance: 0.005
+  ppl_rollback_threshold: 0.15
+  patience: 10              # consecutive rejected steps -> early stop (reported)
+
+controller:
+  kind: llm                 # llm | heuristic
+  model: gemini-3-flash-preview   # the paper's controller; any OpenAI-compatible or Anthropic model works
+  temperature: 0.5
+  max_tokens: 8192
+  history_window: 1         # paper: feedback from iteration t-1 only
+  allow_model_switch: false # failover endpoints must serve the SAME model (keeps the controller fixed)
+  on_unavailable: pause     # pause (exit 76, supervisor retries later) | heuristic (labelled fallback)
+  retries: 6
+  timeout_s: 180
+  backoff_s: [5, 15, 45, 120, 300, 600]
+  endpoints:                # tried in order; add a second route to the same model for redundancy
+    - name: gemini
+      api: openai
+      base_url: https://generativelanguage.googleapis.com/v1beta/openai
+      api_key_env: GEMINI_API_KEY
+    # - name: openrouter-gemini        # same model via another provider
+    #   api: openai
+    #   base_url: https://openrouter.ai/api/v1
+    #   api_key_env: OPENROUTER_API_KEY
+    #   model: google/gemini-3-flash-preview   # set allow_model_switch: true if the id string differs
+    # - name: lmstudio-local           # a local frozen model (LM Studio / Ollama / vLLM)
+    #   api: openai
+    #   base_url: http://localhost:1234/v1
+    #   response_format: null
+  heuristic: {initial_gain: 0.02, grow: 1.25, shrink: 0.5, min_gain: 0.004, max_gain: 0.05,
+              unit_increment: 0.05, tabu_iterations: 2}
+
+testing:
+  policy: none              # none (paper) | balanced | loss_ranked | neyman | cap
+  shots: 0                  # probes are 0-shot (cheap); final evaluation is 5-shot
+  # Defaults below were chosen by simulation with the real per-domain probe-pool sizes
+  # (tests/test_method_units.py::test_gate_operating_characteristics): a harmless step passes
+  # >= 90 % of the time, a domain truly 10+ points over is rejected ~85-95 % of the time.
+  # With 800 questions/step the same rule passes only 40-80 % of harmless steps.
+  decision_rule: per_domain # per_domain | familywise (wrongly rejects ~22 % of harmless steps; comparison only)
+  step_budget: 2400         # max probe questions per proposed step (0-shot, seconds on a 5090)
+  total_budget: 60000       # max probe questions per run (matched across CAP variants)
+  min_per_domain: 30        # minimum coverage: every domain is checked every step
+  round_size: 300           # questions added per sequential round after the first
+  accept_max_violation: 0.20   # (TUNE) accept when EVERY domain has P(limit violated) <= this
+  reject_min_violation: 0.90   # (TUNE) reject early when SOME domain has P(limit violated) >= this ...
+  min_fail_n: 60               # ... and at least this many questions were asked in that domain
+  prior: [0.5, 4.0, 0.5]    # Dirichlet prior on (lost, agree, gained)
+  mc_samples: 4000
+  alpha: 0.25               # CAP allocation: sd * (alpha + P(violation))
+  loss_limit:
+    final: {0.2: 0.06, 0.4: 0.12}   # (TUNE) max domain accuracy loss at the target sparsity
+    floor: 0.04             # limits below ~0.03 cannot be certified with the available probe pool
+    schedule: linear        # limit grows with sparsity progress (no front-loaded damage)
+  imbalance_limit: 0.06     # (TUNE) a domain may not lose > this much more than the domain average
+  imbalance_min_loss: 0.02
+  max_batch_tokens: 32768
+
+deploy:                     # deployment requirement checked on every candidate (nm/structured only)
+  check: per_step           # per_step | off
+  require: [prefill, decode]
+  max_latency_ratio_vs_parent: 1.05   # (TUNE) set above your GPU's run-to-run timing noise
+  max_peak_memory_gb: null
+  quick: {prompt_len: 512, gen_tokens: 32, warmup: 3, repeats: 15}
+
+final_eval:
+  split: final              # final = held-out test sets; dev = method-development sets (see dev_tuning.yaml)
+  mmlu_shots: 5
+  max_seq_len: 4096
+  max_batch_tokens: 32768
+  chunk_size: 512           # final-eval answers are cached per chunk (resume mid-evaluation)
+  freebaseqa: true
+  fqa_max_new_tokens: 24
+  wikitext: true
+
+benchmark:
+  enabled: true
+  prompt_lens: [512, 2048]
+  gen_tokens: 128
+  batch_size: 1
+  warmup: 3
+  repeats: 10
+  nm_backend: auto          # auto | cutlass
+
+reliability:
+  keep_checkpoints: 3
+  mirror_dir: null          # e.g. D:/cap-prune-mirror - a second disk receives a copy of every checkpoint
+  min_free_gb: 5
+  heartbeat_s: 5
+  hang_timeout_s: 1800      # no progress for 30 min -> worker is restarted
+  max_restarts: 5
+  restart_backoff_s: [30, 60, 120, 300, 600]
+  controller_wait_s: 900
+  retry_failed_passes: 1
+  stop_grace_s: 120
+  dense_copy_device: null   # null = same device as the model; "cpu" to save VRAM
+
+methods:
+  dense: {kind: dense}
+  wanda: {kind: wanda}                           # one-shot sequential Wanda, uniform sparsity
+  paper_agent:                                   # Kodathala & Vunnam baseline: LLM + PPL rollback
+    kind: search
+    overrides: {controller: {kind: llm}, testing: {policy: none}}
+  cap_balanced:                                  # equal testing across domains
+    kind: search
+    overrides: {controller: {kind: llm}, testing: {policy: balanced}}
+  cap_loss_ranked:                               # allocation by observed loss
+    kind: search
+    overrides: {controller: {kind: llm}, testing: {policy: loss_ranked}}
+  cap_neyman:                                    # statistical uncertainty policy
+    kind: search
+    overrides: {controller: {kind: llm}, testing: {policy: neyman}}
+  cap_prune:                                     # full method
+    kind: search
+    overrides: {controller: {kind: llm}, testing: {policy: cap}}
+  heuristic_ppl:                                 # ablation: no LLM, no testing
+    kind: search
+    overrides: {controller: {kind: heuristic}, testing: {policy: none}}
+  heuristic_cap:                                 # ablation: adaptive testing without LLM guidance
+    kind: search
+    overrides: {controller: {kind: heuristic}, testing: {policy: cap}}
+
+matrix:
+  methods: [dense, wanda, paper_agent, cap_balanced, cap_loss_ranked, cap_neyman, cap_prune, heuristic_ppl, heuristic_cap]
+  targets: [0.2, 0.4]
+  seeds: [0, 1, 2]

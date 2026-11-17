@@ -1,0 +1,71 @@
+# Offline smoke test: tiny random Qwen3 + synthetic data on CPU, minutes end to end.
+# Build the model first:  python -m capprune make-tiny --out .smoke/tiny-qwen3
+extends: base.yaml
+
+experiment:
+  name: smoke
+  runs_dir: ../.smoke/runs
+  data_dir: ../.smoke/data
+
+model:
+  name_or_path: ../.smoke/tiny-qwen3
+  dtype: float32
+  device: cpu
+  max_seq_len: 256
+
+pruning:
+  structured: {channel_multiple: 16, max_unit_sparsity: 0.875}
+
+data:
+  source: synthetic
+  calibration: {pool_size: 16, num_samples: 8, seq_len: 64}
+  ppl_gate: {num_samples: 4, seq_len: 64}
+  wikitext: {seq_len: 64, synthetic_tokens: 3000}
+  synthetic_questions_per_subject: 40
+
+profiling: {activation_samples: 4, gradient_samples: 2, gradient_every: 3, activation_batch_size: 4}
+
+search:
+  max_iterations: 6
+  patience: 4
+
+controller:
+  model: mock-controller
+  retries: 2
+  backoff_s: [0.1]
+  timeout_s: 10
+  endpoints:
+    - name: mock
+      api: openai
+      base_url: http://127.0.0.1:8765/v1
+
+testing:
+  step_budget: 64
+  total_budget: 400
+  min_per_domain: 4
+  round_size: 16
+  mc_samples: 1000
+  min_fail_n: 0
+  loss_limit: {final: 0.5, floor: 0.3}
+  imbalance_limit: 0.5
+
+deploy:
+  quick: {prompt_len: 16, gen_tokens: 2, warmup: 1, repeats: 2}
+  max_latency_ratio_vs_parent: 100.0   # CPU timing of a toy model is noise; never block on it
+
+final_eval: {mmlu_shots: 1, max_seq_len: 256, fqa_max_new_tokens: 4, chunk_size: 48}
+
+benchmark: {prompt_lens: [32], gen_tokens: 4, warmup: 1, repeats: 2}
+
+reliability:
+  min_free_gb: 0.1
+  hang_timeout_s: 120
+  max_restarts: 3
+  restart_backoff_s: [1]
+  controller_wait_s: 1
+  stop_grace_s: 20
+
+matrix:
+  methods: [dense, wanda, paper_agent, cap_prune, heuristic_cap]
+  targets: [0.2]
+  seeds: [0]

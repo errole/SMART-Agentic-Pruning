@@ -1,0 +1,11 @@
+# Hardware-supported semi-structured 2:4 sparsity (NVIDIA sparse tensor cores).
+# Each step converts whole linear units to 2:4 (50 %); 20 % / 40 % global sparsity
+# = 40 % / 80 % of eligible weights in 2:4 units.  Every candidate is
+# materialised with torch.sparse semi-structured kernels and must not be slower
+# than its parent (deployment requirement).
+extends: base.yaml
+
+experiment:
+  runs_dir: ~/cap-prune-runs/nm
+pruning:
+  mode: nm

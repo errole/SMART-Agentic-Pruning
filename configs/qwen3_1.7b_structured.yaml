@@ -1,0 +1,9 @@
+# Hardware-supported structured pruning: MLP intermediate channels are removed
+# (gate/up/down jointly, multiples of 64) so the model physically shrinks and
+# runs faster on any GPU. Eligible weights = MLP weights (75 % of decoder linears).
+extends: base.yaml
+
+experiment:
+  runs_dir: ~/cap-prune-runs/structured
+pruning:
+  mode: structured

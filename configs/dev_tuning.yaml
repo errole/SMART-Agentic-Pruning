@@ -1,0 +1,21 @@
+# Method development: tune the (TUNE) thresholds in base.yaml on DEVELOPMENT data
+# (MMLU validation, FreebaseQA dev, WikiText-2 validation) so the held-out final
+# sets stay untouched until the thresholds are frozen.
+#
+#   python -m capprune supervise --config configs/dev_tuning.yaml
+#   python -m capprune report    --config configs/dev_tuning.yaml
+#
+# Try candidate settings with --set (each setting needs its own runs_dir), e.g.
+#   --set testing.accept_max_violation=0.1 --set experiment.runs_dir=~/cap-prune-runs/dev-a010
+extends: base.yaml
+
+experiment:
+  runs_dir: ~/cap-prune-runs/dev
+final_eval:
+  split: dev
+benchmark:
+  enabled: false
+matrix:
+  methods: [dense, paper_agent, cap_prune]
+  targets: [0.2, 0.4]
+  seeds: [0]

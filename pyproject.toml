@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "capprune"
+version = "1.0.0"
+description = "CAP-Prune: Capability-Aware, Budgeted Agentic Pruning for Hardware-Efficient LLMs"
+requires-python = ">=3.10"
+# Install a CUDA build of PyTorch FIRST (RTX 50-series / Blackwell needs CUDA 12.8+ wheels); see README.
+dependencies = [
+  "torch>=2.7",
+  "transformers>=4.51",
+  "datasets>=2.19",
+  "huggingface_hub>=0.23",
+  "safetensors>=0.4",
+  "numpy>=1.24",
+  "pyyaml>=6",
+  "psutil>=5.9",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=7", "tokenizers>=0.15"]
+
+[project.scripts]
+capprune = "capprune.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["capprune*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
