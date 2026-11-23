@@ -25,6 +25,7 @@
                     calibrate | compare
   archive-checkpoints  rebuild + verify every accepted checkpoint of finished runs into an archive (runs are only read)
   population-regate retrospective population-level re-gating of finished runs (CPU): register | run
+  pool-signals      4-letter log-probabilities on the gate pool and continuous paired signals: score | analyze
   results-index     one index of every experiment: configs, code hashes, commit, reports, headline numbers
   backup            zip the runs root with a per-file SHA-256 manifest and copy it to verified destinations
                     (the live run itself: `supervise` with a `kind: ranked_search` method)
@@ -372,6 +373,19 @@ def cmd_population_regate(args) -> int:
     return 0
 
 
+def cmd_pool_signals(args) -> int:
+    from . import pool_signals as ps
+    from .utils.log import setup_logging
+
+    setup_logging()
+    cfg = _cfg(args)
+    p = ps.score(cfg) if args.phase == "score" else ps.analyze(cfg)
+    if p.suffix == ".md":
+        print(p.read_text(encoding="utf-8"))
+    print(f"\nwritten: {p}")
+    return 0
+
+
 def _utf8_output() -> None:
     """Never let a non-ASCII character (the report prints a Greek Delta) crash a print.
 
@@ -462,6 +476,9 @@ def main(argv=None) -> int:
     p.add_argument("--out", default="~/cap-prune-runs/_archive/checkpoints")
     p.add_argument("--experiments", help="comma-separated experiment folders (default: all)")
     p.set_defaults(fn=cmd_archive_checkpoints)
+    p = sub.add_parser("pool-signals"); common(p)
+    p.add_argument("phase", choices=["score", "analyze"])
+    p.set_defaults(fn=cmd_pool_signals)
     p = sub.add_parser("population-regate"); common(p)
     p.add_argument("phase", choices=["register", "run"])
     p.set_defaults(fn=cmd_population_regate)
