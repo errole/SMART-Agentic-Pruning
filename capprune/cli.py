@@ -24,6 +24,7 @@
   gradient-boundary compression boundary, gate-margin calibration, policy comparison: recover | margin-plan | audit |
                     calibrate | compare
   archive-checkpoints  rebuild + verify every accepted checkpoint of finished runs into an archive (runs are only read)
+  population-regate retrospective population-level re-gating of finished runs (CPU): register | run
   results-index     one index of every experiment: configs, code hashes, commit, reports, headline numbers
   backup            zip the runs root with a per-file SHA-256 manifest and copy it to verified destinations
                     (the live run itself: `supervise` with a `kind: ranked_search` method)
@@ -358,6 +359,19 @@ def cmd_backup(args) -> int:
     return 0 if all(c["verified"] for c in rec["copies"]) else 1
 
 
+def cmd_population_regate(args) -> int:
+    from . import population_regate as pr
+    from .utils.log import setup_logging
+
+    setup_logging()
+    cfg = _cfg(args)
+    p = pr.register(cfg) if args.phase == "register" else pr.run(cfg)
+    if p.suffix == ".md":
+        print(p.read_text(encoding="utf-8"))
+    print(f"\nwritten: {p}")
+    return 0
+
+
 def _utf8_output() -> None:
     """Never let a non-ASCII character (the report prints a Greek Delta) crash a print.
 
@@ -448,6 +462,9 @@ def main(argv=None) -> int:
     p.add_argument("--out", default="~/cap-prune-runs/_archive/checkpoints")
     p.add_argument("--experiments", help="comma-separated experiment folders (default: all)")
     p.set_defaults(fn=cmd_archive_checkpoints)
+    p = sub.add_parser("population-regate"); common(p)
+    p.add_argument("phase", choices=["register", "run"])
+    p.set_defaults(fn=cmd_population_regate)
     p = sub.add_parser("results-index")
     p.add_argument("--registry", default=str(Path(__file__).resolve().parents[1] / "configs" / "results_registry.yaml"))
     p.add_argument("--root", default="~/cap-prune-runs")

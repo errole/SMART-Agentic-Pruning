@@ -1,0 +1,13 @@
+# Retrospective population-level re-gating of runs A/B/C (CPU only; no pruning search, no scoring).
+# The rule and its parameters live in docs/population_gate_rule.md (pre-registered, hashed before computing).
+#
+#   python -m capprune population-regate register --config configs/population_regate.yaml   # hash the rule first
+#   python -m capprune population-regate run      --config configs/population_regate.yaml   # -> <out_dir>/report.md
+extends: gradient_live_ext.yaml
+
+population_regate:
+  rule_file: ../docs/population_gate_rule.md
+  out_dir: ~/cap-prune-runs/population-regate
+  runs_root: ~/cap-prune-runs
+  archive: ~/cap-prune-runs/_archive/checkpoints     # verified accepted states (cross-check of the CPU rebuilds)
+  dense_parameters: 1720574976                       # Qwen3-1.7B total parameters (materialised dense count)
