@@ -357,18 +357,26 @@ def score(cfg: dict) -> Path:
             act, _, _ = load_profile(rd / "profiles" / f"iter-{pt:06d}.safetensors", dev)
             digest = weights_digest(state)
             dcon = sqlite3.connect(f"file:{(diag_dir / 'pairs.sqlite').as_posix()}?mode=ro", uri=True)
+            rcon = sqlite3.connect(f"file:{(rd / 'caches' / 'eval.sqlite').as_posix()}?mode=ro", uri=True)
             for s, drow in zip(a["shortlist"], dg["candidates"]):
                 parent_masks = dict(state.masks)
                 changed, actual = build_trial(state, dense, s["action"], act, rc, geo)
                 h = mask_hash(state)
                 if not score_it:
-                    n_keys = dcon.execute("SELECT COUNT(*) FROM kv WHERE k LIKE ?", (f"pair|{h}|%",)).fetchone()[0]
+                    # the diagnostic's answers for this mask at its order seed: in its own pairs cache, or - for the
+                    # rank it replayed - in the run's answer cache, which it read through (``replayed_from_run_cache``)
+                    pre = (f"pair|{h}|{int(dg['order_seed'])}|%",)
+                    n_diag = dcon.execute("SELECT COUNT(*) FROM kv WHERE k LIKE ?", pre).fetchone()[0]
+                    n_run = rcon.execute("SELECT COUNT(*) FROM kv WHERE k LIKE ?", pre).fetchone()[0]
                     lv = live.get(int(s["rank"]))
-                    chk = {"parent": par["name"], "rank": int(s["rank"]), "mask_hash": h, "diagnostic_cache_keys": n_keys,
+                    chk = {"parent": par["name"], "rank": int(s["rank"]), "mask_hash": h,
+                           "diagnostic_pairs_keys": n_diag, "run_cache_keys": n_run,
+                           "diagnostic_replayed_questions": int(drow["replayed_from_run_cache"]),
                            "channels": sum(actual.values()), "action_key_canonical": canon(s["action"]) == s["action_key"],
                            "live_attempt": lv[0] if lv else None, "matches_live_trial": (h == lv[1]) if lv else None}
                     checks.append(chk)
-                    if n_keys == 0 or not chk["action_key_canonical"] or chk["matches_live_trial"] is False:
+                    found = n_run > 0 if chk["diagnostic_replayed_questions"] else n_diag > 0
+                    if not found or not chk["action_key_canonical"] or chk["matches_live_trial"] is False:
                         raise RuntimeError(f"{par['name']} rank {s['rank']}: rebuilt mask fails verification {chk}")
                     cands.append({"parent": par["name"], "parent_id": a["parent_id"], "attempt": int(par["attempt"]),
                                   "rank": int(s["rank"]), "kind": s["kind"], "layers": s["layers"],
@@ -388,6 +396,7 @@ def score(cfg: dict) -> Path:
                 if weights_digest(state) != digest:
                     raise RuntimeError("parent not restored exactly after a candidate")
             dcon.close()
+            rcon.close()
 
     cands, checks = [], []
     walk(False)
