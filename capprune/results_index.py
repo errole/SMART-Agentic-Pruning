@@ -189,7 +189,30 @@ def _pool_signals(root: Path, folder: str) -> list[str]:
     return out
 
 
-EXTRACTORS = {"population_regate": _population_regate, "pool_signals": _pool_signals, "search_runs": _search_runs, "ranked_run": _ranked_run, "boundary": _boundary, "compare": _compare,
+def _screen_confirm(root: Path, folder: str) -> list[str]:
+    S = _opt(root / folder / "confirmation_sizes.json")
+    if not S:
+        return []
+    n80 = {c: v["needed"]["1.0"]["n80_final"] for c, v in S["categories"].items()}
+    return [f"confirmation items per category for 80 % power at a true loss of 1.0 pt (final-checkpoint q): "
+            + ", ".join(f"{c} {n:,}" for c, n in n80.items()) + f" (total {sum(n80.values()):,})"]
+
+
+def _matched_signals(root: Path, folder: str) -> list[str]:
+    S = _opt(root / folder / "analysis.json")
+    if not S:
+        return []
+    out = [f"lead criterion (KL regret below net flip from n on): {S['lead_n'] or 'none in the grid'}"]
+    for n in S["plan"]["sizes"]:
+        r = S["summary"]["regret"][f"{n}|pooled"]
+        out.append(f"n={n}/category pooled regret (pts): S0 {100 * r['S0']['mean']:.2f}, KL {100 * r['S2']['mean']:.2f}, "
+                   f"S1c {100 * r['S1c']['mean']:.2f}, gradient rank 1 {100 * r['gradient rank 1']['mean']:.2f}, "
+                   f"random {100 * r['random (expected)']['mean']:.2f}")
+    return out
+
+
+EXTRACTORS = {"population_regate": _population_regate, "pool_signals": _pool_signals, "screen_confirm": _screen_confirm,
+              "matched_signals": _matched_signals, "search_runs": _search_runs, "ranked_run": _ranked_run, "boundary": _boundary, "compare": _compare,
               "ranker": _ranker, "fixed_state": _fixed_state, "gap": _gap, "adaptive_replay": _adaptive_replay,
               "gate_design": _gate_design}
 
