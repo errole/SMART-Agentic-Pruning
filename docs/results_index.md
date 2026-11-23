@@ -1,6 +1,6 @@
 # CAP-Prune results index
 
-Generated 2026-11-23 17:08:54 from `C:\Users\elbas\cap-prune-runs`. Code: commit `9c4891aa64387e72f5d831130b95b85711fc0f09` on `research/cap-prune-experiments` (working tree clean: True). Environment: {'python': '3.12.10', 'platform': 'Windows-11-10.0.26300-SP0', 'torch': '2.11.0+cu128', 'cuda': '12.8', 'gpu': 'NVIDIA GeForce RTX 5090', 'transformers': '5.23.0'}.
+Generated 2026-11-23 17:57:11 from `C:\Users\elbas\cap-prune-runs`. Code: commit `6bb49c4e18dcf0d97d60b29758f9d7db05aa38a0` on `research/population-regate` (working tree clean: True). Environment: {'python': '3.12.10', 'platform': 'Windows-11-10.0.26300-SP0', 'torch': '2.11.0+cu128', 'cuda': '12.8', 'gpu': 'NVIDIA GeForce RTX 5090', 'transformers': '5.23.0'}.
 
 Code provenance: results produced before the first research commit came from uncommitted code; for runs with a `registration.json` the SHA-256 (16 hex) of the key source files at registration is listed with the files that have changed since. Headline numbers are copied from each experiment's own JSON outputs.
 
@@ -19,6 +19,8 @@ Code provenance: results produced before the first research commit came from unc
 | **gradient-top2**: Arm B: gradient top-2 fallback, current gate | exploratory audit | `configs/gradient_top2.yaml` 8d8b6ce6053a | `C:\Users\elbas\cap-prune-runs\gradient-top2\_analysis\audit_materialized\audit_materialized.md` | none |
 | **gradient-top2-strict**: Arm C: gradient top-2 fallback, stricter gate (margin 2.0 pts, exploratory) | exploratory audit, exploratory margin | `configs/gradient_top2_strict.yaml` c98443c15468 | `C:\Users\elbas\cap-prune-runs\gradient-top2-strict\_analysis\audit_materialized\audit_materialized.md` | none |
 | **gradient-compare**: A vs B vs C live-policy comparison | exploratory | `configs/gradient_compare.yaml` 9a0c18da0dc2 | `C:\Users\elbas\cap-prune-runs\gradient-compare\report.md` | not registered (pre-commit code) |
+| **population-regate**: Retrospective population-level re-gating of runs A/B/C (pre-registered rule v1, CPU) | retrospective (pre-registered rule); audit comparisons exploratory | `configs/population_regate.yaml` b72ce52c0db5<br>`docs/population_gate_rule.md` 7115043e63cb | `C:\Users\elbas\cap-prune-runs\population-regate\report.md`<br>`C:\Users\elbas\cap-prune-runs\population-regate\phase1_summary.md` | not registered (pre-commit code) |
+| **pool-signals**: Continuous paired signals on the gate pool vs. exploratory audit losses (7 checkpoints) | exploratory, descriptive (n = 7) | `configs/pool_signals.yaml` a0f2b4a772ad<br>`docs/pool_signals_plan.md` 7c605c3875dd | `C:\Users\elbas\cap-prune-runs\pool-signals\report.md`<br>`C:\Users\elbas\cap-prune-runs\pool-signals\phase2_summary.md` | not registered (pre-commit code) |
 | **unstructured**: Unstructured-mode CAP-Prune matrix (started, never progressed past setup) | incomplete | `configs/base.yaml` ef931627011e | - | not registered (pre-commit code) |
 
 ## Headline numbers
@@ -112,6 +114,17 @@ Folder `gradient-compare` (present); docs `docs/gradient_live.md`; runs: none.
 * B (gradient top-2, current gate): 7.77 % params, 51,274 paired questions, 962 s search; MMLU-CF validation: point estimates meet the limit, but the intervals do not exclude a loss above it; MMLU held-out final split: does NOT meet the limit (a category's point estimate is above it)
 * C (gradient top-2, locked stricter gate): 3.20 % params, 33,206 paired questions, 597 s search; MMLU-CF validation: meets the limit; the simultaneous upper bounds support it; MMLU held-out final split: meets the limit; the simultaneous upper bounds support it
 
+### population-regate: Retrospective population-level re-gating of runs A/B/C (pre-registered rule v1, CPU)
+Folder `population-regate` (present); docs `docs/population_gate.md`; runs: none.
+* run A: first population non-accept at attempt 1 (inconclusive (revealed items); live accept) -> stop with 0.00 % of parameters removed
+* run B: first population non-accept at attempt 1 (inconclusive (revealed items); live accept) -> stop with 0.00 % of parameters removed
+* run C: first population non-accept at attempt 3 (inconclusive (revealed items); live accept) -> stop with 0.91 % of parameters removed
+
+### pool-signals: Continuous paired signals on the gate pool vs. exploratory audit losses (7 checkpoints)
+Folder `pool-signals` (present); docs `docs/population_gate.md`; runs: none.
+* comparison: Spearman per-category / worst / overall: S0 +0.60/+0.82/+0.86; S0b +0.82/+0.93/+0.93; S1 -0.36/-0.54/-0.50; S2 +0.80/+0.96/+0.93
+* exploratory: Spearman per-category / worst / overall: S0 +0.90/+0.89/+0.93; S0b +0.83/+0.93/+0.82; S1 -0.15/-0.54/-0.29; S2 +0.80/+0.96/+0.82
+
 ### unstructured: Unstructured-mode CAP-Prune matrix (started, never progressed past setup)
 Folder `unstructured` (present); docs `README.md`; runs: cap_prune__t20__s0 (science 10d1da77622d1a41), dense (science eaf17ecc04a66c2d).
 * cap_prune__t20__s0: no final summary (run unfinished)
@@ -136,8 +149,10 @@ Folder `unstructured` (present); docs `README.md`; runs: cap_prune__t20__s0 (sci
 ## Test records
 
 * `C:\Users\elbas\cap-prune-runs\_tests\2026-11-23_19caeeb4f434`: 104 passed in 790.08s (0:13:10) (commit `19caeeb4f434`)
+* `C:\Users\elbas\cap-prune-runs\_tests\2026-11-23_6bb49c4e18dc`: 114 passed in 834.59s (0:13:54) (commit `6bb49c4e18dc`)
 * `C:\Users\elbas\cap-prune-runs\_tests\2026-11-23_earlier-session`: see folder (commit `n/a`)
 
 ## Backups (verified copies of the runs root)
 
 * 2026-11-23_170822: `cap-prune-runs_2026-11-23_170822_9c4891aa6438.zip` (111 MB, 2398 files, sha256 `ff583044aa138247...`) -> `E:\cap-prune-backups\cap-prune-runs_2026-11-23_170822_9c4891aa6438.zip` verified=True; `C:\Users\elbas\OneDrive\Documents\Education\NYU Tandon - GY\Efficient AI Computing Algorithm and Implementation\project\CAP-Prune-backups\cap-prune-runs_2026-11-23_170822_9c4891aa6438.zip` verified=True
+* 2026-11-23_175649: `cap-prune-runs_2026-11-23_175649_6bb49c4e18dc.zip` (119 MB, 3913 files, sha256 `7b3a65b922adacea...`) -> `E:\cap-prune-backups\cap-prune-runs_2026-11-23_175649_6bb49c4e18dc.zip` verified=True; `C:\Users\elbas\OneDrive\Documents\Education\NYU Tandon - GY\Efficient AI Computing Algorithm and Implementation\project\CAP-Prune-backups\cap-prune-runs_2026-11-23_175649_6bb49c4e18dc.zip` verified=True
