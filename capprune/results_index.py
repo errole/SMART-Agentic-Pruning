@@ -182,7 +182,7 @@ def build_index(registry: Path, root: Path) -> Path:
     exps = []
     for e in reg["experiments"]:
         folder = root / e["folder"]
-        rec = {**{k: e.get(k) for k in ("id", "title", "folder", "label", "docs")}, "exists": folder.exists(),
+        rec = {**{k: e.get(k) for k in ("id", "title", "folder", "label", "docs", "notes")}, "exists": folder.exists(),
                "configs": [{"path": c, "sha256": sha256_file(REPO / c) if (REPO / c).exists() else None} for c in e["configs"]],
                "reports": [{"path": str(root / r), "exists": (root / r).exists()} for r in e["reports"]]}
         runs = []
@@ -235,6 +235,8 @@ def render(idx: dict) -> str:
         L.append(f"### {e['id']}: {e['title']}")
         L.append(f"Folder `{e['folder']}` ({'present' if e['exists'] else 'MISSING'}); docs `{e['docs']}`; runs: "
                  + (", ".join(f"{r['run']} (science {r['science_hash']})" for r in e["runs"]) or "none") + ".")
+        if e.get("notes"):
+            L.append(f"Provenance note: {e['notes']}")
         L += [f"* {h}" for h in e["headline"]] + [""]
     ca = idx.get("checkpoint_archive")
     if ca:

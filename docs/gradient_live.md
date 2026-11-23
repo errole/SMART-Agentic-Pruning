@@ -377,7 +377,7 @@ Code and outputs:
 |---|---|---|---|---|---|---|
 | attempt 10 | 4.57 % | Soc +0.23 | +1.86 | Other +0.48 | +1.45 | yes |
 | attempt 11 | 5.03 % | — (all ≤ 0) | +1.51 | Other +0.16 | +1.18 | yes |
-| attempt 12 | 5.49 % | Soc +0.70 | +2.67 | STEM +0.85 | +2.06 | **yes** |
+| attempt 12 | 5.48 % | Soc +0.70 | +2.67 | STEM +0.85 | +2.06 | **yes** |
 | attempt 13 | 5.94 % | Soc +1.51 | **+3.48** | STEM +0.63 | +1.90 | no (MMLU-CF Social Sciences interval) |
 | attempt 14 | 6.40 % | Other +2.52 | +3.95 | **STEM +3.75** | +5.55 | no |
 | attempt 15 | 6.86 % | Other +2.16 | +3.51 | **STEM +3.65** | +5.39 | no |
@@ -386,7 +386,7 @@ Code and outputs:
 UB = largest simultaneous one-sided 95 % upper bound.
 
 **Reading the map:**
-* The last state the audit supports is **5.49 %** (attempt 12).
+* The last state the audit supports is **5.48 %** (attempt 12).
 * Attempt 13 fails only because one interval is wide: its point estimates are ≤ +1.51 everywhere, but MMLU-CF
   Social Sciences has just 861 items.
 * The point estimates first go over the limit at **6.40 %** (attempt 14).
@@ -439,7 +439,7 @@ The overall-loss differences are paired on identical audit items.
 1. **Top-2 did not extend the compression the audit supports.** It pushed the pruning-time-certified frontier from
    6.86 % to 7.77 %, at +39 % questions and +42 % search time. But B's checkpoint fails the audit more clearly than
    A's (held-out overall +0.39 pts worse). Neither top-3.0 arm's final checkpoint is supported. The
-   audit-supported point on this trajectory (5.49 %) was found only by inspecting the audit sets.
+   audit-supported point on this trajectory (5.48 %) was found only by inspecting the audit sets.
 2. **The 2-point margin makes the result verifiable but gives up compression.** C's 3.20 % passes the audit with
    room to spare: worst upper bound +1.05. That is less than the 10-proposal pilot's verified 4.57 %, and the
    calibration could not justify a smaller margin.

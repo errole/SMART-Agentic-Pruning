@@ -67,6 +67,7 @@ experiments:
     docs: docs/gradient_live.md
     extractor: ranked_run
     label: "fresh MMLU-CF audit (first use of MMLU-CF)"
+    notes: "Ran on uncommitted code. Reproduced exactly with later code: gradient-live-ext replayed attempts 1-10 (shortlists, actions, gate decisions, question counts, per-category counts, final mask) under verify_prefix."
   - id: gradient-live-ext
     title: "Extended gradient-only search (arm A: top-1, 30 proposals / 100k questions)"
     folder: gradient-live-ext
@@ -75,6 +76,7 @@ experiments:
     docs: docs/gradient_live.md
     extractor: ranked_run
     label: exploratory audit (sets inspected before)
+    notes: "gradient_live.py / gradient_audit.py changed after registration (top-2 fallback, gate margin, logging, reports). Reproduced exactly with the later code: gradient-top2 (arm B) replayed attempts 1-16 under verify_prefix, final mask included."
   - id: gradient-boundary
     title: "Compression boundary of the top-1 trajectory + gate-margin calibration"
     folder: gradient-boundary
