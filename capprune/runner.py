@@ -40,6 +40,20 @@ log = get_logger("runner")
 FINAL_STAGES = ["final_mmlu", "final_fqa", "final_ppl", "benchmark", "summary"]
 
 
+def _git_state() -> dict:
+    """Commit of the code this run starts with, and whether the working tree had uncommitted changes."""
+    import subprocess
+
+    repo = Path(__file__).resolve().parents[1]
+    try:
+        head = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=True, cwd=repo).stdout.strip()
+        dirty = subprocess.run(["git", "status", "--porcelain", "--", "capprune", "configs"], capture_output=True, text=True,
+                               check=True, cwd=repo).stdout.strip()
+        return {"commit": head, "uncommitted_changes_in_code_or_configs": bool(dirty)}
+    except Exception as e:  # noqa: BLE001  (not a git checkout)
+        return {"commit": None, "error": str(e)[:200]}
+
+
 class SharedLock(rt.RunLock):
     """Waits (instead of failing) while another run computes a shared reference."""
 
@@ -79,7 +93,7 @@ class RunContext:
         mirror = rel.get("mirror_dir")
         mirror_path = (Path(os.path.expandvars(mirror)) / self.id) if mirror else None
         self.store = CheckpointStore(self.run_dir, int(rel.get("keep_checkpoints", 3)), mirror_path,
-                                     float(rel.get("min_free_gb", 2.0)))
+                                     float(rel.get("min_free_gb", 2.0)), bool(rel.get("keep_all_masks", False)))
         self.eval_cache = KVCache(self.run_dir / "caches" / "eval.sqlite")
         self.ctrl_cache = KVCache(self.run_dir / "caches" / "controller.sqlite")
 
@@ -171,6 +185,7 @@ class RunContext:
         except ImportError:
             pass
         atomic_write_json(p, {"run_id": self.id, "science_hash": h, "config": {k: v for k, v in self.rc.items() if not k.startswith("_")},
+                              "config_path": self.rc.get("_config_path"), "git": _git_state(),
                               "environment": env, "created": time.time()})
 
     def _shared_refs(self) -> None:
@@ -192,9 +207,9 @@ class RunContext:
                     v = perplexity(self.model, self.data.ppl_gate, self.S["batch"], "ppl_gate_bs", 4, self.hb)
                     atomic_write_json(ppath, {"ppl0": v})
         self.ppl0 = float(read_json(ppath)["ppl0"])
-        # dense answers to the whole probe pool
+        # dense answers to the whole probe pool (reference of every paired-loss gate)
         self.dense_probe = {}
-        if t["policy"] != "none":
+        if t["policy"] != "none" or (rc.get("gate") or {}).get("kind") == "capability":
             qkey = short_hash(man["mmlu_probe.jsonl"]["sha256"], man["mmlu_fewshot.jsonl"]["sha256"],
                               t.get("shots", 0), rc["model"].get("max_seq_len", 2048))
             qpath = d / f"dense_probe-{qkey}.json"
@@ -253,9 +268,10 @@ class RunContext:
 
     # ------------------------------------------------------------------ stages
     def stages(self) -> list[str]:
-        head = {"dense": [], "wanda": ["prune_wanda"], "search": ["search"]}[self.kind]
+        head = {"dense": [], "wanda": ["prune_wanda"], "search": ["search"], "ranked_search": ["ranked_search"]}[self.kind]
         fe = self.rc.get("final_eval", {})
-        tail = [s for s in FINAL_STAGES if not (s == "final_fqa" and not fe.get("freebaseqa", True))
+        tail = [s for s in FINAL_STAGES if not (s == "final_mmlu" and not fe.get("mmlu", True))
+                and not (s == "final_fqa" and not fe.get("freebaseqa", True))
                 and not (s == "final_ppl" and not fe.get("wikitext", True))
                 and not (s == "benchmark" and not self.rc.get("benchmark", {}).get("enabled", True))]
         return head + tail
@@ -278,6 +294,15 @@ class RunContext:
             self.checkpoint()
         reason = Search(self).run()
         self.done_stage("search", {"stop_reason": reason})
+
+    def _stage_ranked_search(self) -> None:
+        from .gradient_live import RankedSearch, initial_state
+
+        if self.S.get("search") is None:
+            self.S["search"] = initial_state()
+            self.checkpoint()
+        reason = RankedSearch(self).run()
+        self.done_stage("ranked_search", {"stop_reason": reason})
 
     def _stage_prune_wanda(self) -> None:
         from .pruning.profile import collect_act_sqnorm, sensitivity, zscores
@@ -376,6 +401,7 @@ class RunContext:
             "stop_reason": srch.get("stop_reason"),
             "iterations": (srch.get("iteration", 1) - 1) if srch else None,
             "accepts": srch.get("accepts"), "rollbacks": srch.get("rollbacks"),
+            "gate_counts": srch.get("gate_counts"), "gate": self.rc.get("gate"),
             "budget": srch.get("budget"),
             "pruning_time_ppl": {"dense": srch.get("ppl0"), "final": srch.get("ppl")} if srch else None,
             "mmlu": mm, "freebaseqa": fq, "wikitext2": wt, "benchmark": bm,

@@ -1,0 +1,30 @@
+# CPU smoke test of the extended gradient-only search (tests/test_gradient_live_ext.py fills in the prefix paths).
+# The "original" smoke run is gradient_live_smoke.yaml with gate.capability.tolerance=0.6 and max_proposals=2.
+extends: gradient_live_smoke.yaml
+
+experiment:
+  runs_dir: ../.smoke/gradient-live-ext
+
+gate:
+  capability:
+    tolerance: 0.6
+
+ranked_search:
+  max_proposals: 4
+  question_cap: 100000
+  verify_prefix: null          # set per test: {journal, frozen, attempts, state_id, mask_sha256}
+
+gradient_live:
+  out_dir: ../.smoke/gradient-live-ext/_analysis
+  compare_with: null           # set per test: the original smoke run's analysis dir
+  probe_on_cap: false
+  audit:
+    fresh: null
+    comparison: {name: synthetic held-out split (smoke stand-in), kind: prepared, split: mmlu_final, label: exploratory (smoke)}
+    exploratory: null
+  audit_materialized:
+    expect: null
+    sets: [comparison]
+  fresh_search:
+    decision: "smoke: no fresh set"
+    candidates: []

@@ -1,0 +1,26 @@
+# Live gate experiment with a LOCAL pruning controller: Ollama serving Qwen2.5-7B-Instruct.
+# The model being pruned is still Qwen3-1.7B; everything except the controller is inherited from
+# live_gate.yaml (seed 0, 10 proposals per arm, 3-point capability limit, gate settings, action space).
+# Outputs go to their own runs_dir; the Gemini run (~/cap-prune-runs/live-gate) is not touched.
+#
+#   python -m capprune supervise   --config configs/live_gate_local.yaml
+#   python -m capprune live-bench  --config configs/live_gate_local.yaml   # after unloading the Ollama model
+#   python -m capprune live-report --config configs/live_gate_local.yaml
+extends: live_gate.yaml
+
+experiment:
+  runs_dir: ~/cap-prune-runs/live-gate-ollama
+
+controller:
+  model: "qwen2.5:7b-instruct"
+  endpoints:
+    - name: ollama
+      api: openai
+      base_url: http://127.0.0.1:11434/v1
+
+matrix:
+  methods: [dense, llm_ppl, llm_cap, llm_cap_rr]
+
+live_report:                  # read-only reference: the completed greedy arm (no LLM) from the Gemini run directory
+  reference_arms:
+    - {method: greedy_cap, runs_dir: ~/cap-prune-runs/live-gate, label: "reference: Gemini-run dir"}

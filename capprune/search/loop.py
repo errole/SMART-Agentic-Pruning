@@ -4,10 +4,19 @@ Per iteration t:
   1. profile the accepted model (Wanda sensitivity z-scores; gradient z-scores every 3rd iteration)
   2. ask the controller for layer decisions (LLM with self-reflection feedback, or heuristic)
   3. build the candidate masks deterministically from (accepted masks, decisions, profile)
-  4. gate:  (a) PPL rollback rule (paper, tau = 15 %)
-            (b) CAP only: budgeted sequential domain test  -> pass / fail / inconclusive
-            (c) CAP only, hardware modes: deployment check (latency / memory vs. parent)
+  4. gate:  gate.kind = ppl (default):
+              (a) PPL rollback rule (paper, tau = 15 %)
+              (b) CAP only: budgeted sequential domain test  -> pass / fail / inconclusive
+              (c) CAP only, hardware modes: deployment check (latency / memory vs. parent)
+            gate.kind = capability: the exact-bound sequential test of capprune.adaptive
+              (paired loss vs. the dense model, configurable allocation policy); PPL is
+              measured for the controller's feedback only
   5. accept (write content-addressed masks) or roll back; record feedback; checkpoint.
+
+Every attempt starts from the last accepted checkpoint (the parent) and builds
+one trial from it.  With ``search.verify_rollback`` the loop checks, with an
+exact digest of every prunable weight, that the parent is intact at the start
+of each attempt and is restored bit-for-bit after every rollback.
 
 Crash safety: everything an iteration needs that is expensive or stochastic -
 the profile, the controller response, every probe answer, the candidate's
@@ -21,7 +30,9 @@ import math
 import time
 
 import numpy as np
+import torch
 
+from ..adaptive.live import CapabilityGate, domain_summary, feedback_note, outcome_of, weights_digest
 from ..config import loss_limit_final
 from ..eval.mmlu import MMLUScorer
 from ..eval.perplexity import perplexity
@@ -34,6 +45,14 @@ from ..utils.log import get_logger
 from ..utils.runtime import ControllerUnavailable, check_stop
 from .controller import HeuristicController, LLMController, assessment, sanitize, system_prompt, user_prompt
 from .testing import FAIL, INCONCLUSIVE, Limits, loss_limit, sequential_test
+
+GATE_DECISIONS = ("accept", "reject", "inconclusive", "noop")
+
+
+def _gate_decision(outcome: str, reasons: list[str]) -> str:
+    if outcome in ("accept", "noop"):
+        return outcome
+    return "inconclusive" if "domain_inconclusive" in reasons else "reject"
 
 log = get_logger("search")
 
@@ -77,8 +96,12 @@ class Search:
         self.llm = LLMController(self.rc, ctx.ctrl_cache, ctx.hb) if ck == "llm" else None
         t = self.rc["testing"]
         self.eps_final = loss_limit_final(self.rc)
+        self.gate_kind = (self.rc.get("gate") or {}).get("kind", "ppl")
+        self.cap = CapabilityGate(self.rc, ctx.data.mmlu_probe) if self.gate_kind == "capability" else None
+        self.verify = bool(s.get("verify_rollback", False))
+        self._dev = next(ctx.model.parameters()).device
         self.scorer = None
-        if self.policy != "none":
+        if self.policy != "none" or self.cap is not None:
             self.scorer = MMLUScorer(ctx.model, ctx.tok, ctx.data.mmlu_fewshot, int(t.get("shots", 0)),
                                      int(self.rc["model"].get("max_seq_len", 2048)), ctx.S["batch"], "probe_tokens",
                                      int(t.get("max_batch_tokens", 32768)), ctx.hb)
@@ -110,6 +133,10 @@ class Search:
             left = int(t["total_budget"]) - S["budget"]["probe_questions"]
             if left < int(t["min_per_domain"]) * len(self.ctx.data.domains):
                 return "probe_budget_exhausted"
+        if self.cap is not None and self.cap.total_budget:
+            left = int(self.cap.total_budget) - S["budget"]["probe_questions"]
+            if left < self.cap.budget:
+                return "gate_budget_exhausted"
         return None
 
     # ------------------------------------------------------------------ profile
@@ -156,11 +183,14 @@ class Search:
         hist = S["history"]
         win = int(self.rc["controller"].get("history_window", 1))
         dv = None
-        if self.policy != "none":
+        if self.cap is not None:
+            dv = {"kind": "capability", "domains": S["domain_view"], "tolerance": self.cap.settings.tolerance}
+        elif self.policy != "none":
             nxt = min(self.target, S["rho"] + 0.02)
             lim = self._limits(nxt)
             dv = {"domains": S["domain_view"], "limit_next": lim.eps_abs, "limit_rel": lim.eps_rel}
         return {
+            "gate": self.cap.describe() if self.cap is not None else {"kind": "ppl"},
             "iteration": t, "max_iterations": self.T, "model_name": self.rc["model"]["name_or_path"],
             "mode": mode, "nm": st.nm, "channel_multiple": self.rc["pruning"].get("structured", {}).get("channel_multiple", 64),
             "target": self.target, "rho": S["rho"], "ppl0": S["ppl0"], "ppl": S["ppl"], "tau": self.tau,
@@ -269,6 +299,26 @@ class Search:
         return ok, {"bench": res, "reasons": why}
 
     # ------------------------------------------------------------------ main loop
+    def _sync(self) -> None:
+        if self._dev.type == "cuda":
+            torch.cuda.synchronize(self._dev)
+
+    def _clock(self) -> float:
+        self._sync()
+        return time.perf_counter()
+
+    def _lap(self, t0: float) -> float:
+        self._sync()
+        return time.perf_counter() - t0
+
+    def _add_time(self, tim: dict) -> None:
+        b = self.S["budget"]
+        for k, key in (("profile_s", "profile_seconds"), ("build_s", "build_seconds"), ("ppl_s", "ppl_seconds"),
+                       ("gate_s", "gate_seconds"), ("gate_scoring_s", "gate_scoring_seconds"),
+                       ("rollback_s", "rollback_seconds"), ("iteration_s", "search_wall_seconds")):
+            if k in tim:
+                b[key] = b.get(key, 0.0) + tim[k]
+
     def run(self) -> str:
         ctx, S = self.ctx, self.S
         while True:
@@ -281,27 +331,46 @@ class Search:
                 return reason
             check_stop()
             t = S["iteration"]
+            t_iter = time.perf_counter()
+            tim: dict[str, float] = {}
             ctx.hb.beat("search", f"iteration {t}")
+            parent_id = S["state_id"] or "dense"
+            parent_ok = rollback_ok = None
+            if self.verify:  # the parent must be exactly the last accepted checkpoint
+                dg = weights_digest(ctx.state)
+                if S.get("parent_digest") is None:
+                    S["parent_digest"] = dg
+                parent_ok = dg == S["parent_digest"]
+                if not parent_ok:
+                    log.error("iteration %d: weights of parent %s differ from the accepted checkpoint", t, parent_id)
             fault_point("hang_profile")
+            t0 = self._clock()
             act, sens, grad = self._profile(t)
+            tim["profile_s"] = self._lap(t0)
             fault_point("after_profile")
             S["grad_scores"] = grad
             cctx = self._ctx_for_controller(t, sens, grad)
             check_stop()
+            t0 = time.perf_counter()
             parsed, src = self._propose(t, cctx)
+            tim["controller_s"] = time.perf_counter() - t0
             fault_point("after_controller")
             decisions, notes = sanitize(parsed, ctx.state, self.rc, self.target)
-            rec = {"iteration": t, "controller": src, "reasoning": parsed.get("reasoning", "")[:2000],
+            rec = {"iteration": t, "parent_id": parent_id, "controller": src,
+                   "prompt_variant": None if src.get("source") == "heuristic" else cctx["gate"]["kind"],
+                   "reasoning": parsed.get("reasoning", "")[:2000],
                    "decisions": [(u, round(d, 5)) for u, d in decisions], "notes": notes}
             if parsed.get("stop_pruning") and src.get("source") != "heuristic_fallback":
-                rec.update(outcome="stop")
+                rec.update(outcome="stop", gate_decision="stop", timings=tim)
                 self._journal({"type": "iteration", **rec})
                 S["stop_reason"] = "agent_stop"
                 S["iteration"] = t + 1
                 ctx.checkpoint()
                 continue
-            # ---- build candidate deterministically
+            # ---- build the trial deterministically from the parent
+            t0 = self._clock()
             parent_masks = {n: m for n, m in ctx.state.masks.items()}
+            parent_fp = ctx.state.fingerprint() if self.verify else None
             changed = []
             for name, inc in decisions:
                 new_ratio = ctx.state.unit_sparsity(name) + inc
@@ -310,12 +379,16 @@ class Search:
             cand_id = short_hash(S["state_id"], t, rec["decisions"])
             rho_c = ctx.state.global_sparsity()
             gain = rho_c - S["rho"]
+            self._cap_last = None
             if not changed:
+                tim["build_s"] = self._lap(t0)
                 outcome, reasons, ppl_c, test, dep = "noop", ["no_change"], S["ppl"], None, None
             else:
                 ctx.state.apply(ctx.dense, only=changed)
+                tim["build_s"] = self._lap(t0)
                 fault_point("after_candidate_apply")
-                outcome, reasons, ppl_c, test, dep = self._gate(t, cand_id, rho_c)
+                outcome, reasons, ppl_c, test, dep = self._gate(t, cand_id, rho_c, tim)
+            cap = self._cap_last
             rho_prev, ppl_prev = S["rho"], S["ppl"]
             ppl_pct = (ppl_c / ppl_prev - 1) * 100 if (ppl_c == ppl_c and math.isfinite(ppl_c)) else float("inf")
             if outcome == "accept":
@@ -324,53 +397,93 @@ class Search:
                 S.update(state_id=cand_id, rho=rho_c, ppl=ppl_c, accepts=S["accepts"] + 1, consecutive_rejections=0)
                 if test is not None:
                     S["domain_view"] = {d: {k: round(v[k], 4) for k in ("mean", "lo90", "hi90")} for d, v in test.domains.items()}
+                if cap is not None:
+                    S["domain_view"] = domain_summary(cap[0])
                 if dep and dep.get("bench"):
                     S["parent_bench"] = dep["bench"]
+                if self.verify:
+                    S["parent_digest"] = weights_digest(ctx.state)  # the trial is the next parent
             else:
                 # roll back: restore parent masks and weights of the changed units
+                t0 = self._clock()
                 for n in changed:
                     ctx.state.masks[n] = parent_masks[n]
                 if changed:
                     ctx.state.apply(ctx.dense, only=changed)
+                tim["rollback_s"] = self._lap(t0)
+                if self.verify and changed:
+                    rollback_ok = (weights_digest(ctx.state) == S["parent_digest"]
+                                   and ctx.state.fingerprint() == parent_fp)
+                    if not rollback_ok:
+                        log.error("iteration %d: rollback did not restore parent %s exactly", t, parent_id)
                 S["consecutive_rejections"] += 1
                 if outcome == "rollback":
                     S["rollbacks"] += 1
+            gd = _gate_decision(outcome, reasons)
+            counts = S.setdefault("gate_counts", {k: 0 for k in GATE_DECISIONS})
+            counts[gd] = counts.get(gd, 0) + 1
             fb_outcome = "accept" if outcome == "accept" else "rollback"
             domain_note = None
+            assess = assessment(fb_outcome, gain, ppl_pct, reasons)
             if test is not None:
                 worst = max(test.domains.items(), key=lambda kv: kv[1]["mean"])
                 p_max = max(v["p_violate"] for v in test.domains.values())
                 domain_note = (f"{test.decision} after {test.used} questions (highest per-domain P(limit violated)={p_max:.2f}); "
                                f"most affected: {worst[0]} {worst[1]['mean']:+.3f}")
+            if cap is not None:
+                domain_note, assess = feedback_note(cap[0], self.cap.settings)
             feedback = {"iteration": t, "reasoning": rec["reasoning"], "decisions": rec["decisions"],
                         "outcome": fb_outcome, "sparsity_gain": gain, "ppl_change_pct": ppl_pct if math.isfinite(ppl_pct) else 999.0,
-                        "domain_note": domain_note, "assessment": assessment(fb_outcome, gain, ppl_pct, reasons)}
-            rec.update(cand_id=cand_id, outcome=outcome, reasons=reasons, rho_before=round(rho_prev, 6),
+                        "domain_note": domain_note, "assessment": assess}
+            if cap is not None:
+                run, info = cap
+                gate_rec = {"kind": "capability", "policy": self.cap.policy_name, "decision": run.decision,
+                            "questions": run.questions, "budget": self.cap.budget, "order_seed": info["order_seed"],
+                            "domains": domain_summary(run), "looks": run.looks_reached, "steps": run.steps,
+                            "trace": run.trace}
+            elif changed:
+                gate_rec = {"kind": "ppl" if test is None else f"ppl+{self.policy}", "decision": gd,
+                            "ppl_parent": ppl_prev, "ppl_trial": ppl_c, "tau": self.tau}
+            else:
+                gate_rec = {"kind": self.gate_kind, "decision": "noop"}
+            tim["iteration_s"] = time.perf_counter() - t_iter
+            self._add_time(tim)
+            rec.update(cand_id=cand_id, trial_id=cand_id, outcome=outcome, reasons=reasons, gate_decision=gd,
+                       gate=gate_rec, rho_before=round(rho_prev, 6),
                        ppl_before=ppl_prev, rho_candidate=round(rho_c, 6), ppl_candidate=ppl_c,
                        ppl_change_pct=feedback["ppl_change_pct"],
+                       rho_after=round(S["rho"], 6), target_reached=S["rho"] >= self.target - self.tol,
                        test=test.to_json() if test is not None else None,
                        deploy={k: v for k, v in (dep or {}).items() if k != "bench"},
+                       timings={k: round(v, 4) for k, v in tim.items()},
+                       parent_verified=parent_ok, rollback_verified=rollback_ok,
                        feedback=feedback,
                        compact=f"{t}: {fb_outcome}, gain {gain:+.4f}, PPL {feedback['ppl_change_pct']:+.2f}%")
             S["history"].append({k: rec[k] for k in ("iteration", "outcome", "reasons", "decisions", "feedback", "compact",
                                                      "ppl_change_pct", "rho_candidate", "cand_id")})
             self._journal({"type": "iteration", **rec})
-            log.info("iter %d: %s %s | rho %.4f -> %.4f | ppl %+.2f%%%s", t, outcome.upper(), ",".join(reasons) or "",
+            log.info("iter %d: %s %s | rho %.4f -> %.4f | ppl %+.2f%%%s%s", t, outcome.upper(), ",".join(reasons) or "",
                      rho_prev, rho_c, feedback["ppl_change_pct"],
-                     f" | test {test.decision} n={test.used}" if test is not None else "")
+                     f" | test {test.decision} n={test.used}" if test is not None else "",
+                     f" | gate {cap[0].decision} n={cap[0].questions}" if cap is not None else "")
             S["iteration"] = t + 1
             ctx.checkpoint()
 
-    def _gate(self, t: int, cand_id: str, rho_c: float):
+    def _gate(self, t: int, cand_id: str, rho_c: float, tim: dict):
+        if self.cap is not None:
+            return self._capability_gate(t, cand_id, tim)
         S = self.S
         S["budget"]["ppl_evals"] += 1
+        t0 = self._clock()
         ppl_c = self._ppl(cand_id)
+        tim["ppl_s"] = self._lap(t0)
         if not math.isfinite(ppl_c):
             return "rollback", ["nan"], float("nan"), None, None
         if (ppl_c - S["ppl"]) / S["ppl"] > self.tau:
             return "rollback", ["ppl"], ppl_c, None, None
         test = None
         if self.policy != "none":
+            t0 = self._clock()
             t_cfg = self.rc["testing"]
             left = int(t_cfg["total_budget"]) - S["budget"]["probe_questions"]
             step_budget = min(int(t_cfg["step_budget"]), left)
@@ -385,6 +498,7 @@ class Search:
                 alpha=float(t_cfg.get("alpha", 0.25)), seed=self.rc["run"]["seed"], iteration=t,
                 on_round=lambda r: self.ctx.hb.beat("gate", f"test round {r['round']} n={r['used']}"),
             )
+            tim["gate_s"] = self._lap(t0)
             S["budget"]["probe_questions"] += test.used
             S["budget"]["probe_tests"] += 1
             S["budget"]["early_stops"] += int(test.early_stop)
@@ -396,3 +510,21 @@ class Search:
         if not ok:
             return "rollback", ["deploy"], ppl_c, test, dep
         return "accept", [], ppl_c, test, dep
+
+    def _capability_gate(self, t: int, cand_id: str, tim: dict):
+        """Exact-bound sequential test vs. the dense model; PPL is measured for feedback only."""
+        S = self.S
+        S["budget"]["ppl_evals"] += 1
+        t0 = self._clock()
+        ppl_c = self._ppl(cand_id)
+        tim["ppl_s"] = self._lap(t0)
+        self.ctx.hb.beat("gate", "capability test")
+        run, info = self.cap.evaluate(t, self.rc["run"]["seed"], self.ctx.dense_probe, self._probe_eval(cand_id),
+                                      cand_id, self._dev)
+        tim["gate_s"], tim["gate_scoring_s"] = info["gate_seconds"], info["scoring_seconds"]
+        S["budget"]["probe_questions"] += run.questions
+        S["budget"]["probe_tests"] += 1
+        S["budget"]["early_stops"] += int(run.decision != "inconclusive" and run.questions < self.cap.budget)
+        self._cap_last = (run, info)
+        outcome, reasons = outcome_of(run.decision)
+        return outcome, reasons, ppl_c, None, None

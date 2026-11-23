@@ -45,11 +45,14 @@ class NoCheckpoint(Exception):
 
 class CheckpointStore:
     def __init__(self, run_dir: str | os.PathLike, keep: int = 3, mirror_dir: str | os.PathLike | None = None,
-                 min_free_gb: float = 2.0):
+                 min_free_gb: float = 2.0, keep_all_masks: bool = False):
         self.run_dir = Path(run_dir)
         self.ckpt_dir = self.run_dir / "ckpt"
         self.mask_dir = self.run_dir / "masks"
         self.keep = max(1, int(keep))
+        # keep_all_masks: never delete the mask file of an accepted state (only checkpoint JSONs rotate), so every
+        # intermediate checkpoint of a run stays on disk (structured masks are ~25 KB per state)
+        self.keep_all_masks = bool(keep_all_masks)
         self.mirror = Path(mirror_dir) if mirror_dir else None
         self.min_free_gb = min_free_gb
         self.ckpt_dir.mkdir(parents=True, exist_ok=True)
@@ -133,6 +136,8 @@ class CheckpointStore:
                     p.unlink()
                 except OSError:
                     pass
+        if self.keep_all_masks:
+            return
         refs = self._referenced_states(self.run_dir)
         for m in (self.mirror / "masks").glob("*.safetensors") if (self.mirror / "masks").exists() else []:
             if m.stem not in refs:
@@ -181,6 +186,8 @@ class CheckpointStore:
                 f.unlink()
             except OSError:
                 pass
+        if self.keep_all_masks:
+            return
         refs = self._referenced_states(self.run_dir)
         for m in self.mask_dir.glob("*.safetensors"):
             if m.stem not in refs:

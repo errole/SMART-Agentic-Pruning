@@ -35,6 +35,9 @@ _NON_SCIENCE = [
     "matrix",
     "methods",
     "benchmark",
+    "live_bench",
+    "live_report",
+    "gradient_live",  # post-run analysis of the ranked search (freeze / diagnose / audit / report)
     "logging",
 ]
 
@@ -125,6 +128,26 @@ def _validate(cfg: dict) -> None:
     pol = cfg["testing"].get("policy")
     if pol not in ("none", "balanced", "loss_ranked", "neyman", "cap"):
         raise ConfigError(f"testing.policy invalid: {pol!r}")
+    gate = cfg.get("gate") or {}
+    kind = gate.get("kind", "ppl")
+    if kind not in ("ppl", "capability"):
+        raise ConfigError(f"gate.kind must be ppl|capability, got {kind!r}")
+    if kind == "capability":
+        if pol != "none":
+            raise ConfigError("gate.kind=capability replaces the testing.policy domain test; set testing.policy: none")
+        cap = gate.get("capability") or {}
+        missing = [k for k in ("domains", "tolerance", "min_sample", "batch_size", "budget",
+                               "alpha_false_accept", "alpha_false_reject") if k not in cap]
+        if missing:
+            raise ConfigError(f"gate.capability is missing {missing}")
+        if cap.get("policy", "threshold_aware") not in ("round_robin", "widest_interval", "threshold_aware"):
+            raise ConfigError(f"gate.capability.policy invalid: {cap.get('policy')!r}")
+    for name, m in (cfg.get("methods") or {}).items():
+        if (m or {}).get("kind") == "ranked_search":
+            if "ranked_search" not in cfg or "ranker" not in cfg:
+                raise ConfigError(f"method {name} (kind ranked_search) needs the ranked_search and ranker sections")
+            if (m.get("overrides") or {}).get("gate", {}).get("kind", kind) != "capability":
+                raise ConfigError(f"method {name} (kind ranked_search) needs gate.kind: capability")
 
 
 def resolve_path(cfg: dict, p: str | None) -> Path | None:

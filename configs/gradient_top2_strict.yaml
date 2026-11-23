@@ -1,0 +1,28 @@
+# Arm C: gradient top-2 with the stricter pruning-time gate.  Identical to arm B except the gate margin: every category's
+# pruning-time tolerance is 3.0 - margin points; the audit target stays 3.0 points.
+#
+# Margin: the calibration on the development states (~/cap-prune-runs/gradient-boundary/calibration.json) was
+# INCONCLUSIVE - attempt 13 passes the gate at every grid margin but fails the audit criterion - so, by the rule recorded
+# before those states were scored, C uses the largest grid margin (2.0 points; pruning-time tolerance 1.0 point) and is
+# labelled EXPLORATORY.  `gradient-live register` refuses to register a margin that differs from that lock.
+#
+#   python -m capprune gradient-live register           --config configs/gradient_top2_strict.yaml   # before the launch
+#   python -m capprune supervise                        --config configs/gradient_top2_strict.yaml
+#   python -m capprune gradient-live freeze             --config configs/gradient_top2_strict.yaml
+#   python -m capprune gradient-live diagnose           --config configs/gradient_top2_strict.yaml
+#   python -m capprune gradient-live audit-data         --config configs/gradient_top2_strict.yaml
+#   python -m capprune gradient-live audit-materialized --config configs/gradient_top2_strict.yaml
+extends: gradient_top2.yaml
+
+experiment:
+  runs_dir: ~/cap-prune-runs/gradient-top2-strict
+
+ranked_search:
+  gate_margin: 0.02            # locked (inconclusive calibration -> predeclared fallback); EXPLORATORY
+  verify_prefix: null          # the stricter gate changes the trajectory from the first attempt
+
+gradient_live:
+  out_dir: ~/cap-prune-runs/gradient-top2-strict/_analysis
+  margin_lock:
+    calibration: ~/cap-prune-runs/gradient-boundary/calibration.json
+    if_inconclusive_pts: 2.0

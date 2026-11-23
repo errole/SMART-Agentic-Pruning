@@ -1,0 +1,52 @@
+# CPU smoke test of the gradient-only live run (tiny random Qwen3, live-smoke data; no controller needed).
+# The live-smoke data's pruning-time answer key is the dense model's own prediction, so every changed answer counts
+# as broken and the cumulative loss grows with every accepted step (see tests/live_smoke.py).
+#   python tests/live_smoke.py                                                  # -> .smoke/data-live
+#   python -m capprune supervise                --config configs/gradient_live_smoke.yaml
+#   python -m capprune gradient-live audit-data --config configs/gradient_live_smoke.yaml
+#   python -m capprune gradient-live freeze     --config configs/gradient_live_smoke.yaml
+#   python -m capprune gradient-live diagnose   --config configs/gradient_live_smoke.yaml
+#   python -m capprune gradient-live audit      --config configs/gradient_live_smoke.yaml
+#   python -m capprune gradient-live report     --config configs/gradient_live_smoke.yaml
+extends: ranker_smoke.yaml
+
+experiment:
+  runs_dir: ../.smoke/gradient-live
+
+ranked_search:
+  selector: gradient
+  max_proposals: 4
+  question_cap: null
+  gate_pool: label
+  candidate_stream: 0
+
+gate:
+  capability:
+    tolerance: 0.15
+    budget: 600                # = the smoke label set (640 pool - 4 x 10 probe questions)
+
+methods:
+  gradient_top1:
+    kind: ranked_search
+    overrides: {gate: {kind: capability, capability: {policy: threshold_aware}}}
+
+matrix:
+  methods: [gradient_top1]
+  targets: [0.0]
+  seeds: [0]
+
+final_eval: {mmlu: false, freebaseqa: false, wikitext: false}
+benchmark: {enabled: false}
+
+gradient_live:
+  method: gradient_top1
+  out_dir: ../.smoke/gradient-live/_analysis
+  ranker_dir: null
+  near_top_rank: 2
+  inventory: []
+  audit:
+    batch_size: 16
+    order_seed: 2026
+    bootstrap: 2000
+    fresh: {name: synthetic held-out split (smoke stand-in), kind: prepared, split: mmlu_final, label: fresh (smoke stand-in)}
+    exploratory: null

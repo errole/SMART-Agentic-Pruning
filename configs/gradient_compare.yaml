@@ -1,0 +1,13 @@
+# A vs. B (value of the top-2 fallback) and B vs. C (value of the stricter gate).  Reads the three arms' runs and
+# analyses; writes ~/cap-prune-runs/gradient-compare.
+#   python -m capprune gradient-boundary compare --config configs/gradient_compare.yaml
+extends: gradient_live_ext.yaml
+
+gradient_compare:
+  out_dir: ~/cap-prune-runs/gradient-compare
+  calibration: ~/cap-prune-runs/gradient-boundary/calibration.json
+  boundary: ~/cap-prune-runs/gradient-boundary/boundary.json
+  arms:
+    - {name: A, label: "gradient top-1, current gate (the extended run, reused: same settings)", config: gradient_live_ext.yaml}
+    - {name: B, label: "gradient top-2, current gate", config: gradient_top2.yaml}
+    - {name: C, label: "gradient top-2, locked stricter gate", config: gradient_top2_strict.yaml}
