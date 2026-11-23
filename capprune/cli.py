@@ -386,6 +386,15 @@ def cmd_pool_signals(args) -> int:
     return 0
 
 
+def cmd_screen_confirm(args) -> int:
+    from .screen_confirm import write_sizes
+
+    p = write_sizes(_cfg(args))
+    print(p.read_text(encoding="utf-8"))
+    print(f"\nwritten: {p}")
+    return 0
+
+
 def _utf8_output() -> None:
     """Never let a non-ASCII character (the report prints a Greek Delta) crash a print.
 
@@ -476,6 +485,9 @@ def main(argv=None) -> int:
     p.add_argument("--out", default="~/cap-prune-runs/_archive/checkpoints")
     p.add_argument("--experiments", help="comma-separated experiment folders (default: all)")
     p.set_defaults(fn=cmd_archive_checkpoints)
+    p = sub.add_parser("screen-confirm"); common(p)
+    p.add_argument("phase", choices=["sizes"])
+    p.set_defaults(fn=cmd_screen_confirm)
     p = sub.add_parser("pool-signals"); common(p)
     p.add_argument("phase", choices=["score", "analyze"])
     p.set_defaults(fn=cmd_pool_signals)
