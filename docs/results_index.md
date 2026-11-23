@@ -1,6 +1,6 @@
 # CAP-Prune results index
 
-Generated 2026-11-23 17:57:11 from `C:\Users\elbas\cap-prune-runs`. Code: commit `6bb49c4e18dcf0d97d60b29758f9d7db05aa38a0` on `research/population-regate` (working tree clean: True). Environment: {'python': '3.12.10', 'platform': 'Windows-11-10.0.26300-SP0', 'torch': '2.11.0+cu128', 'cuda': '12.8', 'gpu': 'NVIDIA GeForce RTX 5090', 'transformers': '5.23.0'}.
+Generated 2026-11-23 18:55:49 from `C:\Users\elbas\cap-prune-runs`. Code: commit `d3864f0d5e831e5dce48c04837a8f818934234a5` on `research/screen-confirm` (working tree clean: True). Environment: {'python': '3.12.10', 'platform': 'Windows-11-10.0.26300-SP0', 'torch': '2.11.0+cu128', 'cuda': '12.8', 'gpu': 'NVIDIA GeForce RTX 5090', 'transformers': '5.23.0'}.
 
 Code provenance: results produced before the first research commit came from uncommitted code; for runs with a `registration.json` the SHA-256 (16 hex) of the key source files at registration is listed with the files that have changed since. Headline numbers are copied from each experiment's own JSON outputs.
 
@@ -21,6 +21,8 @@ Code provenance: results produced before the first research commit came from unc
 | **gradient-compare**: A vs B vs C live-policy comparison | exploratory | `configs/gradient_compare.yaml` 9a0c18da0dc2 | `C:\Users\elbas\cap-prune-runs\gradient-compare\report.md` | not registered (pre-commit code) |
 | **population-regate**: Retrospective population-level re-gating of runs A/B/C (pre-registered rule v1, CPU) | retrospective (pre-registered rule); audit comparisons exploratory | `configs/population_regate.yaml` b72ce52c0db5<br>`docs/population_gate_rule.md` 7115043e63cb | `C:\Users\elbas\cap-prune-runs\population-regate\report.md`<br>`C:\Users\elbas\cap-prune-runs\population-regate\phase1_summary.md` | not registered (pre-commit code) |
 | **pool-signals**: Continuous paired signals on the gate pool vs. exploratory audit losses (7 checkpoints) | exploratory, descriptive (n = 7) | `configs/pool_signals.yaml` a0f2b4a772ad<br>`docs/pool_signals_plan.md` 7c605c3875dd | `C:\Users\elbas\cap-prune-runs\pool-signals\report.md`<br>`C:\Users\elbas\cap-prune-runs\pool-signals\phase2_summary.md` | not registered (pre-commit code) |
+| **screen-confirm**: Screen-then-confirm protocol v1: confirmation sample sizes per category (no confirmation run yet) | protocol (committed before any new scoring); sample-size planning only | `configs/screen_confirm.yaml` e9da2b1761dd<br>`docs/screen_confirm_protocol.md` 173414051407 | `C:\Users\elbas\cap-prune-runs\screen-confirm\confirmation_sizes.md` | not registered (pre-commit code) |
+| **matched-signals**: Matched-compression signal test: KL vs. net flip as choice signals among equal-size actions (3 stall parents x 11) | exploratory (pre-registered plan and split; gate-pool items only, no audit sets) | `configs/matched_signals.yaml` d1ea52638121<br>`docs/matched_signal_plan.md` 49685fb4e6fe | `C:\Users\elbas\cap-prune-runs\matched-signals\report.md` | none |
 | **unstructured**: Unstructured-mode CAP-Prune matrix (started, never progressed past setup) | incomplete | `configs/base.yaml` ef931627011e | - | not registered (pre-commit code) |
 
 ## Headline numbers
@@ -125,6 +127,18 @@ Folder `pool-signals` (present); docs `docs/population_gate.md`; runs: none.
 * comparison: Spearman per-category / worst / overall: S0 +0.60/+0.82/+0.86; S0b +0.82/+0.93/+0.93; S1 -0.36/-0.54/-0.50; S2 +0.80/+0.96/+0.93
 * exploratory: Spearman per-category / worst / overall: S0 +0.90/+0.89/+0.93; S0b +0.83/+0.93/+0.82; S1 -0.15/-0.54/-0.29; S2 +0.80/+0.96/+0.82
 
+### screen-confirm: Screen-then-confirm protocol v1: confirmation sample sizes per category (no confirmation run yet)
+Folder `screen-confirm` (present); docs `docs/screen_confirm_protocol.md`; runs: none.
+* confirmation items per category for 80 % power at a true loss of 1.0 pt (final-checkpoint q): Humanities 4,000, Other 5,200, STEM 5,300, Social Sciences 3,750 (total 18,250)
+
+### matched-signals: Matched-compression signal test: KL vs. net flip as choice signals among equal-size actions (3 stall parents x 11)
+Folder `matched-signals` (present); docs `docs/matched_signals.md`; runs: none.
+* lead criterion (KL regret below net flip from n on): 100
+* n=100/category pooled regret (pts): S0 0.88, KL 0.36, S1c 0.37, gradient rank 1 2.13, random 1.56
+* n=200/category pooled regret (pts): S0 0.65, KL 0.30, S1c 0.39, gradient rank 1 2.13, random 1.56
+* n=300/category pooled regret (pts): S0 0.56, KL 0.27, S1c 0.37, gradient rank 1 2.13, random 1.56
+* n=400/category pooled regret (pts): S0 0.64, KL 0.27, S1c 0.38, gradient rank 1 2.13, random 1.56
+
 ### unstructured: Unstructured-mode CAP-Prune matrix (started, never progressed past setup)
 Folder `unstructured` (present); docs `README.md`; runs: cap_prune__t20__s0 (science 10d1da77622d1a41), dense (science eaf17ecc04a66c2d).
 * cap_prune__t20__s0: no final summary (run unfinished)
@@ -150,6 +164,7 @@ Folder `unstructured` (present); docs `README.md`; runs: cap_prune__t20__s0 (sci
 
 * `C:\Users\elbas\cap-prune-runs\_tests\2026-11-23_19caeeb4f434`: 104 passed in 790.08s (0:13:10) (commit `19caeeb4f434`)
 * `C:\Users\elbas\cap-prune-runs\_tests\2026-11-23_6bb49c4e18dc`: 114 passed in 834.59s (0:13:54) (commit `6bb49c4e18dc`)
+* `C:\Users\elbas\cap-prune-runs\_tests\2026-11-23_d3864f0d5e83`: 120 passed in 764.70s (0:12:44) (commit `d3864f0d5e83`)
 * `C:\Users\elbas\cap-prune-runs\_tests\2026-11-23_earlier-session`: see folder (commit `n/a`)
 
 ## Backups (verified copies of the runs root)
