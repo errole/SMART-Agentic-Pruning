@@ -1,0 +1,94 @@
+# Gradient-only selector in the live pruning-and-rollback loop (Qwen3-1.7B, structured MLP channels, seed 0).
+#
+# Inherited from ranker.yaml (-> fixed_state.yaml -> live_gate_local.yaml -> live_gate.yaml): the model, the
+# structured MLP-channel operator (64-channel blocks, 0.875 per-unit cap), the candidate generator and matched step
+# (4 units x 5 blocks x 64 = 1,280 MLP channels per action), the profiling protocol (fixed calibration subsets), the
+# probe/label split and the locked threshold-aware gate (3 points per MMLU category vs. the dense model, alpha 0.05
+# per side, min sample = batch = 100, uniform spending).  No LLM controller is used.
+# Outputs: ~/cap-prune-runs/gradient-live (the Gemini, Ollama, fixed-state and ranker outputs are only read).
+#
+#   python -m capprune gradient-live audit-data --config configs/gradient_live.yaml   # usage inventory + fresh audit set
+#   python -m capprune supervise                --config configs/gradient_live.yaml   # the live run (rerun to resume)
+#   python -m capprune gradient-live freeze     --config configs/gradient_live.yaml   # fix the final checkpoint
+#   python -m capprune gradient-live diagnose   --config configs/gradient_live.yaml   # stall diagnostic (offline, GPU)
+#   python -m capprune gradient-live audit      --config configs/gradient_live.yaml   # audit of the frozen checkpoint (GPU)
+#   python -m capprune gradient-live report     --config configs/gradient_live.yaml   # -> _analysis/report.md
+extends: ranker.yaml
+
+experiment:
+  runs_dir: ~/cap-prune-runs/gradient-live
+
+ranked_search:
+  selector: gradient           # rank by ascending mean z_grad of the action's units; ties by generator index
+  max_proposals: 10            # pilot cap: gated attempts per run
+  question_cap: 30000          # pilot cap: gate questions over the whole run (a reveal that would exceed it is not made)
+  gate_pool: label             # the ranker's label set (5,214); its 400 probe questions stay unused
+  candidate_stream: 0          # random candidates at parent k: rng([ranker.traj_seed, 7, stream, k])
+
+gate:
+  capability:
+    budget: 5214               # = the label set: the bound becomes exact on exhaustion (as in the ranker experiment)
+
+methods:
+  gradient_top1:
+    kind: ranked_search
+    overrides: {gate: {kind: capability, capability: {policy: threshold_aware}}}
+
+matrix:
+  methods: [gradient_top1]
+  targets: [0.0]               # no sparsity target: the caps or the first failed attempt end the run
+  seeds: [0]
+
+final_eval: {mmlu: false, freebaseqa: false, wikitext: false}   # the audit is `gradient-live audit` (fresh questions)
+benchmark: {enabled: false}
+
+gradient_live:                 # post-run analysis (not part of the run's science hash)
+  method: gradient_top1
+  out_dir: ~/cap-prune-runs/gradient-live/_analysis
+  ranker_dir: ~/cap-prune-runs/ranker/data       # cached label-set scores: read-only cross-check
+  audit_materialized:          # `gradient-live audit-materialized`: the deployable (sliced) model on the original audit's
+    expect:                    #   batches; written to _analysis/audit_materialized (the masked audit stays untouched)
+      state_id: 03810f5b84f494f6
+      mask_sha256: 19533d1ea655244ce4acc1ae1b42c94bd41dcc3dacfa14004868bf18c0ef908b
+    sets: [fresh, exploratory]
+  near_top_rank: 3             # stall rule, fixed before the run: a passing action at rank <= 3 of the shortlist is
+                               #   "near the top" (test a budgeted top-k fallback); a lower first pass means
+                               #   "investigate ranking signals"; every candidate rejected means "smaller step"
+  inventory:                   # artifacts whose question ids count as used (earlier pilots, gate tuning, ranker, gap)
+    - {name: "ranker probe+label (and the pilots' gate pool)", kind: ranker_split, path: ~/cap-prune-runs/ranker/data/split.json}
+    - {name: "fixed-state pool scoring", kind: fixed_state_answers, path: ~/cap-prune-runs/fixed-state/compare/answers-dense.json}
+    - {name: "experiment-1 pilot (pool + held-out)", kind: item_id_jsonl, path: ~/cap-prune-runs/adaptive/pilot/items.jsonl}
+    - {name: "gate tuning (MMLU validation)", kind: item_id_jsonl, path: ~/cap-prune-runs/adaptive/gate-dev/items.jsonl}
+    - {name: "earlier pilots' final audits (5-shot: + MMLU-dev exemplars)", kind: final_mmlu_json, path: "~/cap-prune-runs/live-gate*/*/final/mmlu.json"}
+    - {name: "gap diagnostic", kind: qid_jsonl, path: "~/cap-prune-runs/live-gate-diagnostics/*/per_item.jsonl"}
+  audit:
+    batch_size: 100            # = the gate's batch size; dense and pruned scored on identical batches
+    order_seed: 2026
+    bootstrap: 10000
+    fresh:                     # never used in this project; same 4-choice format; fields map onto MMLU's categories
+      name: MMLU-CF validation
+      kind: mmlu_cf
+      repo: microsoft/MMLU-CF
+      revision: c25b89a968a2062e422dd96ddf0fe3387507f0dd
+      raw_dir: ~/cap-prune-runs/data-audit/raw/mmlu-cf-c25b89a
+      label: fresh
+      files:                   # sha256 of val/<field>_val.parquet at that revision
+        Biology: 7eec128cffcfec814461505d4b5122dc3fa4887a580b42a73fa7e03593c7d519
+        Business: 18dd545578e39df12812dd53076a96b76c1091760519a59f68bf58d1e314f47c
+        Chemistry: 063d66470358b32fd8dc532524845e97c349dd21983ba928b9d5d97c98539f77
+        Computer_Science: f973467d01a0bf62c5c6ab6cc60b7d286ae743d3157040d1d37938842d11580c
+        Economics: 93f2aa69542d7e625a938ea6626ef7f545563ec21b6014a75e5e3e6993c08068
+        Engineering: b54c3da63bd9664f54df773eaf13d896c9bca804ba3ca0f7fae0ff1a8946adff
+        Health: ffcae5b83c00ccb19f8b93f5191608da8ad7a1b0fcc94fbe5095455c2d30b9a9
+        History: 9b610a66bb01899aafc0080ac1695604615075d15dda2999d52907bb408b7d39
+        Law: 09873234f0abacfdcff2115187e51d1808b104cfd25ae150c26ed46c6a131168
+        Math: abec3c0c0e615acf45072422d51c55f4ffdd731aa4ad71a589bfa6830e89b6b0
+        Other: 9a5614da0ae1100cf9fe2985aa4ddb745b29cfc84824eddf21ddf24c0be6a013
+        Philosophy: 43fcbfa03ed9b315f98eda44bf23fad79b16c4ff8bfca3c74cd0987368e85d67
+        Physics: cff3650ea352476ba41733a7a4f0b99dc7ce07be95641f3fa4dca90d52705c5d
+        Psychology: 320642aeb3ad2fe52ec7821cb648418de53001ea44bc4fb65932ff15b98b4eab
+    exploratory:               # in-distribution MMLU, but already used by earlier audits and the gap diagnostic
+      name: MMLU held-out final split
+      kind: prepared
+      split: mmlu_final
+      label: exploratory (reused questions)

@@ -1,0 +1,23 @@
+# CPU smoke test of the learned-ranking pipeline (tiny random Qwen3, live-smoke data; no controller needed).
+#   python -m capprune ranker collect  --config configs/ranker_smoke.yaml
+#   python -m capprune ranker evaluate --config configs/ranker_smoke.yaml
+extends: fixed_state_smoke.yaml
+
+experiment:
+  runs_dir: ../.smoke/ranker
+
+ranker:
+  out_dir: ../.smoke/ranker/data
+  dev_source: ../.smoke/fixed-state/compare   # the fixed-state smoke output (run its smoke first), or null
+  probe_per_domain: 10
+  probe_seed: 4242
+  trajectories: 3
+  steps: 2
+  traj_seed: 1000
+  random_actions: 1
+  step_blocks: 4
+  shortlist: {units_per_action: 2, blocks_per_unit: 2, window_starts: [0, 2]}
+  chunk_size: 48
+  order_seed: 777
+  profile_seed: 0
+  ridge_alphas: [0.1, 1, 10]

@@ -1,0 +1,26 @@
+# Adaptive candidate evaluation on the deterministic CPU fixture (no model, no data).
+#
+#   python -m capprune adaptive-fixture --out .smoke/adaptive-fixture
+#   python -m capprune adaptive-replay  --config configs/adaptive_fixture.yaml
+#
+# Paths are relative to this file.
+
+cache_dir: ../.smoke/adaptive-fixture
+out_dir: ../.smoke/adaptive-fixture/replay
+
+evaluation:
+  domains: [STEM, Humanities, Social Sciences, Other]   # fixed order = round-robin order and tie-break order
+  tolerance: 0.05            # max accuracy loss per domain (scalar or {domain: value}); 0.05 = 5 points
+  min_sample: 40             # questions per domain before the first decision
+  batch_size: 40             # questions per later look of a domain
+  budget: 1000               # max questions per candidate (pool has 2,550)
+  alpha_false_accept: 0.05   # error budget of all upper bounds (all domains, all looks)
+  alpha_false_reject: 0.05   # error budget of all lower bounds
+  spending: uniform          # uniform | power (with spending_rho)
+  seed: 0                    # fixed per-domain question order, shared by all policies
+
+policies: [round_robin, widest_interval, threshold_aware]
+
+search:
+  candidate_order: null      # null = the cache's order (clear_fail, near_threshold, easy_pass)
+  latency_target: {metric: decode_ms_per_token, max_ratio_vs_dense: 0.85}

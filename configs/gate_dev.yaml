@@ -1,0 +1,61 @@
+# Gate development for the live experiment (configs/live_gate.yaml) on DEVELOPMENT data only.
+#
+# Development data = MMLU validation split (`mmlu_dev`), which neither the search (MMLU test probe split)
+# nor the final audit (MMLU test final split) uses.  Small uniform structured-Wanda candidates are scored
+# on it; their per-category broken/fixed answer rates feed a simulation of the capability gate at the
+# real pruning-time pool sizes.  No pruning-time or final-audit answers enter the choice.
+#
+#   python -m capprune adaptive-build --config configs/gate_dev.yaml     # GPU, ~15 min (Wanda x3 + dev scoring)
+#   python -m capprune gate-design    --config configs/gate_dev.yaml     # CPU: options table + locked settings
+#
+# Locking rule (fixed before looking at any result):
+#   * tolerance stays at 3 points (the project's limit) unless no option accepts the 2-point profiles at
+#     least half of the time even with the full-pool budget;
+#   * budget = the smallest option whose acceptance rate for every 2-point profile is >= 80 %;
+#   * spending = uniform, unless power(rho=2) raises that minimum acceptance rate by >= 10 points at the
+#     chosen budget;
+#   * alpha_false_accept = alpha_false_reject = 0.05, min_sample = batch_size = 100 (as in the replay pilot).
+# Profiles failing by 1 point (4-point versions) report the false-accept rate as a check.
+
+cache_dir: ~/cap-prune-runs/adaptive/gate-dev
+out_dir: ~/cap-prune-runs/adaptive/gate-dev/design
+
+evaluation:                    # build layout only (the dev pool is scored in full)
+  domains: [STEM, Humanities, Social Sciences, Other]
+  tolerance: 0.03
+  min_sample: 25
+  batch_size: 25
+  budget: 1000
+  alpha_false_accept: 0.05
+  alpha_false_reject: 0.05
+  seed: 0
+
+build:
+  pipeline_config: qwen3_1.7b_structured.yaml
+  pipeline_overrides: []
+  domain_field: category
+  pool_split: dev              # MMLU validation
+  holdout_split: null          # the final split is not touched
+  shots: 0
+  max_seq_len: 2048
+  max_batch_tokens: 32768
+  calibration_seed: 0
+  latency: null
+  candidates:
+    - {name: wsp05, kind: wanda, sparsity: 0.05}
+    - {name: wsp03, kind: wanda, sparsity: 0.03}
+    - {name: wsp02, kind: wanda, sparsity: 0.02}
+
+design:
+  live_config: live_gate.yaml  # whose gate settings are being chosen (pool sizes come from its probe split)
+  orders: 100                  # simulated question orders per option and profile
+  tolerance: 0.03
+  shifted_worst_losses: [0.02, 0.04]   # worst-category loss of the shifted profiles (2 pts pass, 4 pts fail)
+  options:
+    budget: [3000, 4000, 5614]
+    spending: [uniform, power2]
+  min_sample: 100
+  batch_size: 100
+  alpha_false_accept: 0.05
+  alpha_false_reject: 0.05
+  validation_cache: ~/cap-prune-runs/adaptive/pilot   # replay cache on the pruning-time pool: reported separately

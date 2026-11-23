@@ -1,0 +1,81 @@
+# Extended gradient-only search: same selector, operator, step, ranking, tie-break and gate as gradient_live.yaml,
+# larger caps, run until the first top-ranked failure.  Separate run directory; the original pilot is only read.
+#
+# Branching a finished run directory is not supported (resuming it with new caps is refused by the science-hash
+# guard, and its files must stay untouched), so this run REPLAYS the pilot from dense with seed 0: attempts 1-10 must
+# reproduce the pilot's parents, shortlists, chosen actions, gate decisions and question counts exactly, and the
+# mask after attempt 10 must have the frozen checkpoint's SHA-256 - otherwise the run stops (`prefix_mismatch`)
+# before extending anything.  The replayed prefix counts toward the question cap.
+#
+#   python -m capprune gradient-live audit-data         --config configs/gradient_live_ext.yaml   # inventory (no fresh set)
+#   python -m capprune gradient-live register           --config configs/gradient_live_ext.yaml   # caps, BEFORE launching
+#   python -m capprune supervise                        --config configs/gradient_live_ext.yaml
+#   python -m capprune gradient-live freeze             --config configs/gradient_live_ext.yaml
+#   python -m capprune gradient-live diagnose           --config configs/gradient_live_ext.yaml   # first stall, offline
+#   python -m capprune gradient-live audit-materialized --config configs/gradient_live_ext.yaml
+#   python -m capprune gradient-live report             --config configs/gradient_live_ext.yaml
+extends: gradient_live.yaml
+
+experiment:
+  runs_dir: ~/cap-prune-runs/gradient-live-ext
+
+ranked_search:
+  max_proposals: 30            # extended cap, including the 10 replayed pilot attempts
+  question_cap: 100000         # paired gate questions in total (one item scored on dense AND trial), incl. the prefix
+  verify_prefix:
+    journal: ~/cap-prune-runs/gradient-live/gradient_top1__t00__s0/journal.jsonl
+    frozen: ~/cap-prune-runs/gradient-live/_analysis/frozen/frozen.json
+    attempts: 10
+    state_id: 03810f5b84f494f6
+    mask_sha256: 19533d1ea655244ce4acc1ae1b42c94bd41dcc3dacfa14004868bf18c0ef908b
+
+gradient_live:
+  out_dir: ~/cap-prune-runs/gradient-live-ext/_analysis
+  compare_with: ~/cap-prune-runs/gradient-live/_analysis
+  probe_on_cap: false          # a cap reached first leaves the failure point open (no offline probe)
+  inventory:                   # everything the original pilot's inventory counted, plus the original audits
+    - {name: "ranker probe+label (and the pilots' gate pool)", kind: ranker_split, path: ~/cap-prune-runs/ranker/data/split.json}
+    - {name: "fixed-state pool scoring", kind: fixed_state_answers, path: ~/cap-prune-runs/fixed-state/compare/answers-dense.json}
+    - {name: "experiment-1 pilot (pool + held-out)", kind: item_id_jsonl, path: ~/cap-prune-runs/adaptive/pilot/items.jsonl}
+    - {name: "gate tuning (MMLU validation)", kind: item_id_jsonl, path: ~/cap-prune-runs/adaptive/gate-dev/items.jsonl}
+    - {name: "earlier pilots' final audits (5-shot: + MMLU-dev exemplars)", kind: final_mmlu_json, path: "~/cap-prune-runs/live-gate*/*/final/mmlu.json"}
+    - {name: "gap diagnostic", kind: qid_jsonl, path: "~/cap-prune-runs/live-gate-diagnostics/*/per_item.jsonl"}
+    - {name: "gradient-live pilot audits (MMLU-CF val, MMLU held-out)", kind: qid_jsonl, path: "~/cap-prune-runs/gradient-live/_analysis/audit/per_item-*.jsonl"}
+  audit:
+    fresh: null                # no suitable never-used set exists (see fresh_search): the audit is exploratory
+    comparison:
+      name: MMLU-CF validation
+      kind: mmlu_cf
+      repo: microsoft/MMLU-CF
+      revision: c25b89a968a2062e422dd96ddf0fe3387507f0dd
+      raw_dir: ~/cap-prune-runs/data-audit/raw/mmlu-cf-c25b89a
+      label: exploratory (MMLU-CF validation, inspected in the pilot's audit; comparison only)
+      files:
+        Biology: 7eec128cffcfec814461505d4b5122dc3fa4887a580b42a73fa7e03593c7d519
+        Business: 18dd545578e39df12812dd53076a96b76c1091760519a59f68bf58d1e314f47c
+        Chemistry: 063d66470358b32fd8dc532524845e97c349dd21983ba928b9d5d97c98539f77
+        Computer_Science: f973467d01a0bf62c5c6ab6cc60b7d286ae743d3157040d1d37938842d11580c
+        Economics: 93f2aa69542d7e625a938ea6626ef7f545563ec21b6014a75e5e3e6993c08068
+        Engineering: b54c3da63bd9664f54df773eaf13d896c9bca804ba3ca0f7fae0ff1a8946adff
+        Health: ffcae5b83c00ccb19f8b93f5191608da8ad7a1b0fcc94fbe5095455c2d30b9a9
+        History: 9b610a66bb01899aafc0080ac1695604615075d15dda2999d52907bb408b7d39
+        Law: 09873234f0abacfdcff2115187e51d1808b104cfd25ae150c26ed46c6a131168
+        Math: abec3c0c0e615acf45072422d51c55f4ffdd731aa4ad71a589bfa6830e89b6b0
+        Other: 9a5614da0ae1100cf9fe2985aa4ddb745b29cfc84824eddf21ddf24c0be6a013
+        Philosophy: 43fcbfa03ed9b315f98eda44bf23fad79b16c4ff8bfca3c74cd0987368e85d67
+        Physics: cff3650ea352476ba41733a7a4f0b99dc7ce07be95641f3fa4dca90d52705c5d
+        Psychology: 320642aeb3ad2fe52ec7821cb648418de53001ea44bc4fb65932ff15b98b4eab
+  audit_materialized:
+    expect: null               # unknown before the run; freeze records it
+    sets: [comparison, exploratory]
+  fresh_search:                # decided 2026-11-23 before the extended run was launched
+    criteria: "never scored by CAP-Prune and not MMLU-derived; English 4-choice items usable unchanged with the gate's 0-shot A-D template; all four MMLU categories with >= 400 items each; public and pinnable"
+    decision: "no suitable fresh set found: the extended checkpoint's audit is exploratory (MMLU-CF validation for comparison, MMLU held-out final)"
+    candidates:
+      - {name: "MMLU (cais/mmlu) test / validation / dev", verdict: "every question already used (inventory: 0 unused of 15,858)"}
+      - {name: "MMLU-Redux 2.0, MMLU-SR, Global-MMLU, MMMLU / translated MMLU", verdict: "MMLU-derived: the same (used) questions"}
+      - {name: "MMLU-CF validation (microsoft/MMLU-CF @ c25b89a)", verdict: "inspected in the pilot's audit: comparison only"}
+      - {name: "MMLU-CF test", verdict: "not public (the repository holds only val and dev)"}
+      - {name: "MMLU-CF dev", verdict: "few-shot exemplar files (dev.parquet: 5 rows): far too small"}
+      - {name: "MMLU-Pro (TIGER-Lab/MMLU-Pro @ b189ec7, test)", verdict: "Humanities has 0 of 1,981 items not taken from MMLU; 9,981 of 12,032 items have 10 options (not the 4-choice template)"}
+      - {name: "MMLU auxiliary_train", verdict: "ARC/OBQA/RACE items without subject or category labels"}

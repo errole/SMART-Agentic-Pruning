@@ -7,3 +7,5 @@ experiment:
   runs_dir: ~/cap-prune-runs/structured
 pruning:
   mode: structured
+reliability:
+  keep_all_masks: true      # keep the mask of EVERY accepted state (~25 KB each in structured mode); not part of the science hash

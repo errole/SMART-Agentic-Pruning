@@ -59,9 +59,22 @@ MODE_TEXT = {
 }
 
 
-def system_prompt(ctx: dict) -> str:
-    n, m = ctx["nm"]
-    mode = MODE_TEXT[ctx["mode"]].format(n=n, m=m, s=1 - n / m, mult=ctx.get("channel_multiple", 64))
+def gate_rule(ctx: dict) -> str:
+    """The acceptance rule as the controller is told it.  Only this line (and the domain view / domain
+    feedback in the user prompt) differs between the perplexity-gated and capability-gated arms."""
+    g = ctx.get("gate") or {"kind": "ppl"}
+    if g["kind"] == "capability":
+        tol = g["tolerance"]
+        vals = sorted(set(tol.values()))
+        lim = (f"{100 * vals[0]:.1f} accuracy points" if len(vals) == 1
+               else ", ".join(f"{d} {100 * v:.1f}" for d, v in tol.items()) + " accuracy points")
+        return ("- After each step the candidate is tested on multiple-choice questions from the knowledge categories "
+                f"{', '.join(g['domains'])}, paired question by question against the ORIGINAL unpruned model, so losses "
+                f"accumulate over steps. The step is ACCEPTED only when the test certifies that every category's "
+                f"accuracy loss is at most {lim}; it is REJECTED as soon as some category is shown to exceed its limit, "
+                f"and rolled back as INCONCLUSIVE if {g['budget']} test questions are not enough to decide. Perplexity is "
+                "reported for information only and does not decide acceptance. Prefer choices that protect the most "
+                "affected category.\n")
     cap_rule = ""
     if ctx.get("domain_view") is not None:
         cap_rule = (
@@ -71,6 +84,13 @@ def system_prompt(ctx: dict) -> str:
             "or if a deployment requirement (latency/memory) fails. Prefer choices that spread damage evenly and "
             "protect the most affected domain."
         )
+    return (f"- After each step, if perplexity rises by more than {ctx['tau']:.0%} relative to the previous accepted "
+            f"model, the step is rolled back.{cap_rule}\n")
+
+
+def system_prompt(ctx: dict) -> str:
+    n, m = ctx["nm"]
+    mode = MODE_TEXT[ctx["mode"]].format(n=n, m=m, s=1 - n / m, mult=ctx.get("channel_multiple", 64))
     return (
         f"You are an expert model-compression agent guiding iterative post-training pruning of the language model "
         f"{ctx['model_name']}. At each iteration you choose which prunable units to prune further and by how much. "
@@ -87,8 +107,7 @@ def system_prompt(ctx: dict) -> str:
         f"- additional_sparsity must be in [{ctx['min_inc']}, {ctx['max_inc']}]; a unit's total sparsity may not "
         f"exceed {ctx['max_unit']}.\n"
         "- Use unit names exactly as listed.\n"
-        f"- After each step, if perplexity rises by more than {ctx['tau']:.0%} relative to the previous accepted "
-        f"model, the step is rolled back.{cap_rule}\n"
+        + gate_rule(ctx) +
         "- Make steady progress toward the target sparsity; do not overshoot it.\n"
         "- Analyse the feedback on your previous decisions and refine your strategy: repeat what worked, become more "
         "conservative after poor outcomes, accelerate when quality stays stable.\n\n"
@@ -106,7 +125,19 @@ def user_prompt(ctx: dict) -> str:
         f"({(ctx['ppl'] / ctx['ppl0'] - 1) * 100:+.2f}% vs. baseline).",
     ]
     dv = ctx.get("domain_view")
-    if dv is not None:
+    if dv is not None and dv.get("kind") == "capability":
+        lines.append("")
+        tol = dv["tolerance"]
+        if dv.get("domains"):
+            lines.append("Accuracy loss per knowledge category of the current accepted model vs. the original model "
+                         "(accuracy points: estimate [lower bound, upper bound], limit):")
+            for d, s in dv["domains"].items():
+                lines.append(f"  {d}: {100 * s['est']:+.1f} [{100 * s['lo']:+.1f}, {100 * s['hi']:+.1f}], limit "
+                             f"{100 * tol[d]:.1f}")
+        else:
+            lines.append("No pruning step has been accepted yet (the current model is the original). Category limits "
+                         "(accuracy points): " + ", ".join(f"{d} {100 * v:.1f}" for d, v in tol.items()) + ".")
+    elif dv is not None:
         lines.append("")
         if dv.get("domains"):
             lines.append(

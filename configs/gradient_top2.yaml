@@ -1,0 +1,39 @@
+# Arm B: gradient top-2 with the current gate.  Identical to arm A (= the extended top-1 run, gradient_live_ext.yaml:
+# dense start, seed 0, action generator, 1,280-channel step, gate, caps of 30 proposals / 100,000 paired questions) except
+# that a rank-1 REJECT/INCONCLUSIVE restores the parent and queues the parent's rank-2 action as the next proposal (its own
+# attempt number and question order; both candidates count against both caps).  Up to A's first failure (attempt 16)
+# the two arms must coincide, so B replays A and checks it attempt by attempt (verify_prefix).
+#
+#   python -m capprune gradient-live register           --config configs/gradient_top2.yaml   # before the launch
+#   python -m capprune supervise                        --config configs/gradient_top2.yaml
+#   python -m capprune gradient-live freeze             --config configs/gradient_top2.yaml
+#   python -m capprune gradient-live diagnose           --config configs/gradient_top2.yaml
+#   python -m capprune gradient-live audit-data         --config configs/gradient_top2.yaml
+#   python -m capprune gradient-live audit-materialized --config configs/gradient_top2.yaml
+extends: gradient_live_ext.yaml
+
+experiment:
+  runs_dir: ~/cap-prune-runs/gradient-top2
+
+ranked_search:
+  fallback_k: 2
+  gate_margin: 0.0
+  verify_prefix:
+    journal: ~/cap-prune-runs/gradient-live-ext/gradient_top1__t00__s0/journal.jsonl
+    frozen: ~/cap-prune-runs/gradient-live-ext/_analysis/frozen/frozen.json
+    attempts: 16
+    state_id: e65e9461315ef207
+    mask_sha256: 35f1a5485f66a538b315738b5adbb2634a1abd35d124c8a7b6b22adde12ec732
+
+methods:
+  gradient_top2:
+    kind: ranked_search
+    overrides: {gate: {kind: capability, capability: {policy: threshold_aware}}}
+
+matrix:
+  methods: [gradient_top2]
+
+gradient_live:
+  method: gradient_top2
+  out_dir: ~/cap-prune-runs/gradient-top2/_analysis
+  compare_with: ~/cap-prune-runs/gradient-live-ext/_analysis

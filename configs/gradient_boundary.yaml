@@ -1,0 +1,30 @@
+# Compression boundary of the gradient-only trajectory + calibration of a stricter pruning-time gate (EXPLORATORY:
+# the audit sets were inspected before).  Reads the extended top-1 run (gradient-live-ext) and its stall diagnostic;
+# writes only to ~/cap-prune-runs/gradient-boundary.
+#
+#   python -m capprune gradient-boundary recover     --config configs/gradient_boundary.yaml   # masks, verified vs. the journal
+#   python -m capprune gradient-boundary margin-plan --config configs/gradient_boundary.yaml   # rule, BEFORE scoring new states
+#   python -m capprune gradient-boundary audit       --config configs/gradient_boundary.yaml   # materialised, matched 0-shot
+#   python -m capprune gradient-boundary calibrate   --config configs/gradient_boundary.yaml   # gate at 3 - m, rule -> margin
+extends: gradient_live_ext.yaml
+
+gradient_boundary:
+  out_dir: ~/cap-prune-runs/gradient-boundary
+  source_run: ~/cap-prune-runs/gradient-live-ext/gradient_top1__t00__s0
+  diagnostic: ~/cap-prune-runs/gradient-live-ext/_analysis/diagnostic
+  anchors:                     # checkpoints whose frozen masks and materialised audits already exist (reused when hashes match)
+    - {frozen: ~/cap-prune-runs/gradient-live/_analysis/frozen/frozen.json, audit: ~/cap-prune-runs/gradient-live/_analysis/audit_materialized}
+    - {frozen: ~/cap-prune-runs/gradient-live-ext/_analysis/frozen/frozen.json, audit: ~/cap-prune-runs/gradient-live-ext/_analysis/audit_materialized}
+  attempts: [10, 11, 12, 13, 14, 15]   # accepted checkpoints: 10 and 15 = the two audited anchors, 11-14 recovered
+  rank2: {attempt: 16, rank: 2, action_key: "L20.mlp:5,L21.mlp:5,L22.mlp:5,L23.mlp:5"}
+  audit_inventory: ~/cap-prune-runs/gradient-live-ext/_analysis/audit_data/inventory.json
+  audit_roles: [comparison, exploratory]   # MMLU-CF validation and MMLU held-out final: both inspected before
+  dense_reference:             # dense answers on the identical batches, from the two earlier materialised audits
+    - ~/cap-prune-runs/gradient-live/_analysis/audit_materialized/scores.sqlite
+    - ~/cap-prune-runs/gradient-live-ext/_analysis/audit_materialized/scores.sqlite
+  # ---- the calibration plan (recorded by `margin-plan` before the new development states are scored)
+  margins: [0.0, 0.005, 0.01, 0.015, 0.02]     # pruning-time tolerance = 3.0 - margin points; audit target stays 3.0
+  gate_definition: "a state passes the stricter gate if the locked threshold-aware gate (label set, budget = pool, alpha 0.05 per side, min sample = batch = 100) returns ACCEPT at per-category tolerance 3.0 - m points, with that state's own live question order"
+  audit_criterion: "the materialised state's simultaneous one-sided 95 % upper loss bound (Bonferroni over the 4 categories) is <= 3.0 points in every category on BOTH inspected sets (MMLU-CF validation, MMLU held-out)"
+  rule: "choose the smallest grid margin for which every development state that passes the stricter gate meets the audit criterion, with at least one pruned state passing; report the number of supporting states"
+  if_inconclusive: "no margin qualifies -> calibration inconclusive; arm C then uses the largest grid margin (2.0 points) and is labelled exploratory"

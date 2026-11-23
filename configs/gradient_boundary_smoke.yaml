@@ -1,0 +1,18 @@
+# CPU smoke test of the boundary/calibration pipeline (tests/test_gradient_top2.py sets every path).
+extends: gradient_live_smoke.yaml
+
+gradient_boundary:
+  out_dir: ../.smoke/gradient-boundary
+  source_run: null
+  diagnostic: null
+  anchors: []
+  attempts: [1]
+  rank2: null
+  audit_inventory: null
+  audit_roles: [fresh]
+  dense_reference: []
+  margins: [0.0, 0.05, 0.1]
+  gate_definition: "smoke: threshold-aware gate at tolerance 0.15 - m with the state's own question order"
+  audit_criterion: "smoke: simultaneous upper bound <= 0.15 in every category"
+  rule: "smallest margin whose gate-passing states all meet the audit criterion, with >= 1 pruned state passing"
+  if_inconclusive: "smoke: largest grid margin, exploratory"

@@ -1,0 +1,27 @@
+# Learned ranking of structured pruning actions for Qwen3-1.7B (no LLM selector; the capability gate decides).
+# Inherits the model, pruning operator, action space, gate (threshold-aware, 3 points) and data from
+# fixed_state.yaml -> live_gate_local.yaml -> live_gate.yaml.  Outputs: ~/cap-prune-runs/ranker/data
+# (the Gemini, Ollama and fixed-state outputs are only read).
+#
+#   python -m capprune ranker collect  --config configs/ranker.yaml     # GPU, ~2 h: trajectories + dev rescoring
+#   python -m capprune ranker evaluate --config configs/ranker.yaml     # CPU: selectors, leave-one-trajectory-out
+extends: fixed_state.yaml
+
+experiment:
+  runs_dir: ~/cap-prune-runs/ranker
+
+ranker:
+  out_dir: ~/cap-prune-runs/ranker/data
+  dev_source: ~/cap-prune-runs/fixed-state/compare   # the pilot's 4 checkpoints, shortlists and LLM choices
+  probe_per_domain: 100        # fixed probe questions per category (400), disjoint from the label/gate questions
+  probe_seed: 4242
+  trajectories: 4              # new independent trajectories T1..T4 from the dense model
+  steps: 3                     # non-dense parents per trajectory (the shared dense parent is group D0)
+  traj_seed: 1000
+  random_actions: 2            # seeded random unit sets per parent, besides the profile- and depth-based ones
+  step_blocks: 20
+  shortlist: {units_per_action: 4, blocks_per_unit: 5, window_starts: [0, 4, 8, 12, 16, 20, 24]}
+  chunk_size: 512              # same scoring procedure for the dense reference and every candidate
+  order_seed: 777              # one gate question order per parent
+  profile_seed: 0
+  ridge_alphas: [0.01, 0.1, 1, 10, 100, 1000]

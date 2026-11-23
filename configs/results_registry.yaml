@@ -1,0 +1,119 @@
+# Registry of every CAP-Prune experiment whose outputs live under the runs root (default ~/cap-prune-runs).
+# `capprune results-index` reads it and writes <root>/RESULTS_INDEX.md + results_index.json: configs (with SHA-256),
+# code hashes (and which source files changed since each run was registered), the git commit, report paths and
+# headline numbers extracted from each experiment's own JSON outputs.  Paths are relative to the runs root.
+experiments:
+  - id: exp1-adaptive-pilot
+    title: "Experiment 1: adaptive candidate evaluation (offline replay, 3 allocation policies)"
+    folder: adaptive/pilot
+    configs: [configs/adaptive_pilot.yaml]
+    reports: [adaptive/pilot/replay/summary.md]
+    docs: docs/adaptive_evaluation.md
+    extractor: adaptive_replay
+    label: pilot
+  - id: gate-design
+    title: "Capability-gate design on development data (MMLU validation) - locked the live gate"
+    folder: adaptive/gate-dev
+    configs: [configs/gate_dev.yaml]
+    reports: [adaptive/gate-dev/design/summary.md]
+    docs: docs/live_gate.md
+    extractor: gate_design
+    label: development (locks settings)
+  - id: live-gate-gemini
+    title: "Experiment 2: capability gate in the live loop, Gemini controller (arms A-D)"
+    folder: live-gate
+    configs: [configs/live_gate.yaml]
+    reports: [live-gate/_live/report.md]
+    docs: docs/live_gate.md
+    extractor: search_runs
+    label: "pilot, one seed (arm B paused at 7/10 by API quota; arm D not started)"
+  - id: live-gate-ollama
+    title: "Experiment 2 with a local controller (Ollama Qwen2.5-7B)"
+    folder: live-gate-ollama
+    configs: [configs/live_gate_local.yaml]
+    reports: [live-gate-ollama/_live/report.md]
+    docs: docs/live_gate.md
+    extractor: search_runs
+    label: exploratory, one seed
+  - id: gap-diagnostic
+    title: "2x2 gap diagnostic of the greedy checkpoint (pool vs held-out x 0- vs 5-shot)"
+    folder: live-gate-diagnostics/greedy_cap_gap
+    configs: [configs/live_gate.yaml]
+    reports: [live-gate-diagnostics/greedy_cap_gap/summary.md]
+    docs: docs/live_gate.md
+    extractor: gap
+    label: diagnostic (held-out split inspected)
+  - id: fixed-state
+    title: "Fixed-state controller comparison (Qwen2.5-14B vs 7B, free-form vs shortlist)"
+    folder: fixed-state/compare
+    configs: [configs/fixed_state.yaml]
+    reports: [fixed-state/compare/report.md]
+    docs: docs/fixed_state.md
+    extractor: fixed_state
+    label: pilot
+  - id: ranker
+    title: "Learned action ranking (offline, leave-one-trajectory-out)"
+    folder: ranker/data
+    configs: [configs/ranker.yaml]
+    reports: [ranker/data/report.md]
+    docs: docs/ranker.md
+    extractor: ranker
+    label: offline comparison
+  - id: gradient-live
+    title: "Gradient-only top-1 live pilot (10 proposals / 30k questions)"
+    folder: gradient-live
+    configs: [configs/gradient_live.yaml]
+    reports: [gradient-live/_analysis/report.md, gradient-live/_analysis/audit_materialized/audit_materialized.md]
+    docs: docs/gradient_live.md
+    extractor: ranked_run
+    label: "fresh MMLU-CF audit (first use of MMLU-CF)"
+    notes: "Ran on uncommitted code. Reproduced exactly with later code: gradient-live-ext replayed attempts 1-10 (shortlists, actions, gate decisions, question counts, per-category counts, final mask) under verify_prefix."
+  - id: gradient-live-ext
+    title: "Extended gradient-only search (arm A: top-1, 30 proposals / 100k questions)"
+    folder: gradient-live-ext
+    configs: [configs/gradient_live_ext.yaml]
+    reports: [gradient-live-ext/_analysis/report.md, gradient-live-ext/_analysis/audit_materialized/audit_materialized.md]
+    docs: docs/gradient_live.md
+    extractor: ranked_run
+    label: exploratory audit (sets inspected before)
+    notes: "gradient_live.py / gradient_audit.py changed after registration (top-2 fallback, gate margin, logging, reports). Reproduced exactly with the later code: gradient-top2 (arm B) replayed attempts 1-16 under verify_prefix, final mask included."
+  - id: gradient-boundary
+    title: "Compression boundary of the top-1 trajectory + gate-margin calibration"
+    folder: gradient-boundary
+    configs: [configs/gradient_boundary.yaml]
+    reports: [gradient-boundary/report.md]
+    docs: docs/gradient_live.md
+    extractor: boundary
+    label: exploratory (calibration inconclusive)
+  - id: gradient-top2
+    title: "Arm B: gradient top-2 fallback, current gate"
+    folder: gradient-top2
+    configs: [configs/gradient_top2.yaml]
+    reports: [gradient-top2/_analysis/audit_materialized/audit_materialized.md]
+    docs: docs/gradient_live.md
+    extractor: ranked_run
+    label: exploratory audit
+  - id: gradient-top2-strict
+    title: "Arm C: gradient top-2 fallback, stricter gate (margin 2.0 pts, exploratory)"
+    folder: gradient-top2-strict
+    configs: [configs/gradient_top2_strict.yaml]
+    reports: [gradient-top2-strict/_analysis/audit_materialized/audit_materialized.md]
+    docs: docs/gradient_live.md
+    extractor: ranked_run
+    label: exploratory audit, exploratory margin
+  - id: gradient-compare
+    title: "A vs B vs C live-policy comparison"
+    folder: gradient-compare
+    configs: [configs/gradient_compare.yaml]
+    reports: [gradient-compare/report.md]
+    docs: docs/gradient_live.md
+    extractor: compare
+    label: exploratory
+  - id: unstructured
+    title: "Unstructured-mode CAP-Prune matrix (started, never progressed past setup)"
+    folder: unstructured
+    configs: [configs/base.yaml]
+    reports: []
+    docs: README.md
+    extractor: search_runs
+    label: incomplete

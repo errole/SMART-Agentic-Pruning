@@ -34,6 +34,12 @@ uninterrupted run would have**.
 | Prefill / token-generation latency, peak GPU memory | `eval/bench.py` on a materialised model (`pruning/materialize.py`) |
 | Total GPU time, confidence intervals, early stops, 3 seeds | `report.py` (seed t-intervals, paired bootstrap, paired method differences) |
 | Checkpoint recovery | `utils/checkpoint.py`, `runner.py`, `supervisor.py` — see §5 |
+| Experiment 1: adaptive candidate evaluation (exact finite-pool bounds, 3 allocation policies, offline replay) | `adaptive/` · `adaptive-build` / `adaptive-replay` — see [docs/adaptive_evaluation.md](docs/adaptive_evaluation.md) |
+| Experiment 2: capability gate in the live pruning-and-rollback loop (arms A–D, gate design on dev data, interleaved benchmark) | `gate: {kind: capability}` in `search/loop.py`, `adaptive/live.py` · `gate-design` / `live-bench` / `live-report` — see [docs/live_gate.md](docs/live_gate.md) |
+| Fixed-state controller comparison (Qwen2.5-14B vs 7B, free-form vs shortlist, frozen parents) | `fixed_state.py` · `fixed-state` — see [docs/fixed_state.md](docs/fixed_state.md) |
+| Learned action ranking (ridge per MMLU category vs random / greedy / gradient / probe selectors, leave-one-trajectory-out) | `ranker.py` · `ranker collect` / `ranker evaluate` — see [docs/ranker.md](docs/ranker.md) |
+| Gradient-only selector in the live loop (top-1 per parent, question/proposal caps, stall diagnostic, fresh MMLU-CF audit; materialised verification; extended search replaying the pilot to its first stall; compression boundary, gate-margin calibration, top-2 fallback and stricter-gate arms) | `gradient_live.py` (method kind `ranked_search`, `verify_prefix`, `fallback_k`, `gate_margin`), `gradient_audit.py`, `gradient_boundary.py` · `supervise` + `gradient-live audit-data / register / freeze / diagnose / audit / audit-materialized / report` + `gradient-boundary recover / margin-plan / audit / calibrate / compare` — see [docs/gradient_live.md](docs/gradient_live.md) |
+| Research records: every accepted checkpoint archived and verified, results index, verified backups, commit recorded per run | `archive.py`, `results_index.py`, `configs/results_registry.yaml` · `archive-checkpoints`, `results-index`, `backup` — see [docs/research_records.md](docs/research_records.md) |
 
 ## 2. Setup (Windows 11, RTX 5090)
 
@@ -70,6 +76,12 @@ python -m capprune prepare --config configs/smoke.yaml
 Start-Process python "tests/mock_controller.py --port 8765"   # fake LLM agent
 python -m capprune supervise --config configs/smoke.yaml
 python -m capprune report    --config configs/smoke.yaml
+
+# experiment 1 (adaptive candidate evaluation) on CPU, no keys
+python -m capprune adaptive-fixture --out .smoke/adaptive-fixture
+python -m capprune adaptive-replay  --config configs/adaptive_fixture.yaml
+python -m capprune adaptive-build   --config configs/adaptive_smoke.yaml
+python -m capprune adaptive-replay  --config configs/adaptive_smoke.yaml
 ```
 
 ## 4. Running the experiment

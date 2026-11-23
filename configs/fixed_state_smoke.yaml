@@ -1,0 +1,24 @@
+# CPU smoke test of the fixed-state comparison (tiny random Qwen3, live-smoke data, scripted mock controllers).
+# Needs a finished greedy smoke run as the state source (configs/live_smoke.yaml) and the mock controller:
+#   Start-Process python "tests/mock_controller.py --port 8765"
+#   python -m capprune fixed-state prepare --config configs/fixed_state_smoke.yaml
+#   python -m capprune fixed-state query   --config configs/fixed_state_smoke.yaml --model mock-a
+#   python -m capprune fixed-state query   --config configs/fixed_state_smoke.yaml --model mock-bad
+#   python -m capprune fixed-state score   --config configs/fixed_state_smoke.yaml
+#   python -m capprune fixed-state report  --config configs/fixed_state_smoke.yaml
+extends: live_smoke.yaml
+
+experiment:
+  runs_dir: ../.smoke/fixed-state
+
+fixed_state:
+  out_dir: ../.smoke/fixed-state/compare
+  state_source: ../.smoke/live-runs-cli/greedy_cap__t50__s0
+  state_targets: [0.02, 0.04]
+  step_blocks: 4              # tiny model: 4 x 16 = 64 channels per action
+  shortlist: {units_per_action: 2, blocks_per_unit: 2, window_starts: [0, 2]}
+  controllers: ["mock-a", "mock-bad"]
+  samples: 2
+  order_seed: 777
+  profile_seed: 0
+  chunk_size: 48

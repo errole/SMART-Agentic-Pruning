@@ -1,0 +1,34 @@
+# Fixed-state controller comparison: does Qwen2.5-14B choose better pruning actions than Qwen2.5-7B, and does a
+# shortlist fix 7B's behaviour?  The model being pruned is still Qwen3-1.7B (structured MLP channels); controller,
+# gate (threshold-aware, 3 points, 5,614-question budget), data and action space come from live_gate_local.yaml.
+# Outputs: ~/cap-prune-runs/fixed-state/compare (the Gemini and earlier Ollama runs are only read).
+#
+#   python -m capprune fixed-state prepare       --config configs/fixed_state.yaml          # GPU: states, profiles, prompts
+#   python -m capprune fixed-state record-models --config configs/fixed_state.yaml
+#   python -m capprune fixed-state query         --config configs/fixed_state.yaml --model qwen2.5:7b-instruct
+#   ollama stop qwen2.5:7b-instruct
+#   python -m capprune fixed-state query         --config configs/fixed_state.yaml --model qwen2.5:14b-instruct
+#   ollama stop qwen2.5:14b-instruct
+#   python -m capprune fixed-state score         --config configs/fixed_state.yaml          # GPU: every state-action pair once
+#   python -m capprune fixed-state report        --config configs/fixed_state.yaml
+extends: live_gate_local.yaml
+
+experiment:
+  runs_dir: ~/cap-prune-runs/fixed-state
+
+fixed_state:
+  out_dir: ~/cap-prune-runs/fixed-state/compare
+  # States, chosen by sparsity only (fixed before any action was scored): dense + the greedy run's accepted
+  # checkpoints nearest 1 %, 2 % and 3 % MLP sparsity (pruned-from-storage masks are rebuilt and checked).
+  state_source: ~/cap-prune-runs/live-gate/greedy_cap__t10__s0
+  state_targets: [0.01, 0.02, 0.03]
+  step_blocks: 20             # every action removes exactly 20 x 64 = 1,280 MLP channels (0.744 % of MLP weights)
+  shortlist:                  # each action = 4 units x 5 blocks (320 channels each) = 20 blocks
+    units_per_action: 4
+    blocks_per_unit: 5
+    window_starts: [0, 4, 8, 12, 16, 20, 24]
+  controllers: ["qwen2.5:7b-instruct", "qwen2.5:14b-instruct"]
+  samples: 3                  # controller samples per (state, condition) at the configured temperature (0.5)
+  order_seed: 777             # one gate question order per state, shared by every action of that state
+  profile_seed: 0
+  chunk_size: 512             # scoring chunks: identical for the dense reference and every trial

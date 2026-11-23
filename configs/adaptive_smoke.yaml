@@ -1,0 +1,45 @@
+# CPU end-to-end smoke test of the pipeline -> cache -> replay path:
+# tiny random Qwen3 + synthetic MMLU-format data (smoke.yaml), structured Wanda candidates.
+#
+#   python -m capprune make-tiny --out .smoke/tiny-qwen3
+#   python -m capprune prepare --config configs/smoke.yaml
+#   python -m capprune adaptive-build  --config configs/adaptive_smoke.yaml
+#   python -m capprune adaptive-replay --config configs/adaptive_smoke.yaml
+#
+# The tiny model is random, so its accuracies and decisions are meaningless; this checks plumbing only.
+# Search pool (synthetic probe split): STEM 64, Humanities 32, Social Sciences 16, Other 16 items.
+
+cache_dir: ../.smoke/adaptive-smoke
+out_dir: ../.smoke/adaptive-smoke/replay
+
+evaluation:
+  domains: [STEM, Humanities, Social Sciences, Other]
+  tolerance: 0.10
+  min_sample: 8
+  batch_size: 8
+  budget: 96
+  alpha_false_accept: 0.05
+  alpha_false_reject: 0.05
+  spending: uniform
+  seed: 0
+
+policies: [round_robin, widest_interval, threshold_aware]
+
+search:
+  candidate_order: null
+  latency_target: {metric: decode_ms_per_token, max_ratio_vs_dense: 1.5}   # CPU timing of a toy model is noise
+
+build:
+  pipeline_config: smoke.yaml
+  pipeline_overrides: ["pruning.mode=structured"]
+  domain_field: category       # the four broad MMLU categories
+  pool_split: probe            # searched by the sequential test
+  holdout_split: final         # final check only
+  shots: 0
+  max_seq_len: 256
+  max_batch_tokens: 8192
+  calibration_seed: 0
+  latency: {prompt_len: 32, gen_tokens: 4, warmup: 1, repeats: 3}
+  candidates:                  # list order = search order
+    - {name: wsp50, kind: wanda, sparsity: 0.50}
+    - {name: wsp25, kind: wanda, sparsity: 0.25}

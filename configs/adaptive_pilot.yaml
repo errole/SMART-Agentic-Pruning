@@ -1,0 +1,57 @@
+# First real pilot: Qwen3-1.7B, the four broad MMLU categories, the original dense checkpoint and
+# structured-pruning candidates (MLP channels physically removed), replayed under three allocation policies.
+#
+#   python -m capprune prepare        --config configs/qwen3_1.7b_structured.yaml   # once (data + weights)
+#   python -m capprune adaptive-build  --config configs/adaptive_pilot.yaml          # GPU: scores, times, benchmarks
+#   python -m capprune adaptive-replay --config configs/adaptive_pilot.yaml          # CPU, seconds
+#
+# Replay-only settings (tolerance, budget, alphas, spending, policies, search) can be changed with --set
+# without rebuilding, e.g.  --set evaluation.tolerance=0.05 --set out_dir=~/cap-prune-runs/adaptive/pilot/replay-tol05
+# seed / min_sample / batch_size define the timed batches: change them and replay still works but reports
+# GPU time as n/a until you rebuild with the same values.
+
+cache_dir: ~/cap-prune-runs/adaptive/pilot              # keep off OneDrive
+out_dir: ~/cap-prune-runs/adaptive/pilot/replay
+
+evaluation:
+  domains: [STEM, Humanities, Social Sciences, Other]   # search pool (MMLU probe split): 1261 / 1881 / 1230 / 1242
+  tolerance: 0.03            # max accuracy loss per domain vs dense (scalar or {domain: value})
+  min_sample: 100
+  batch_size: 100
+  budget: 3000               # max questions per candidate (pool: 5,614)
+  alpha_false_accept: 0.05
+  alpha_false_reject: 0.05
+  spending: uniform
+  seed: 0
+
+policies: [round_robin, widest_interval, threshold_aware]
+
+search:
+  candidate_order: null      # null = build order below (most aggressive first)
+  # HF eager decoding at batch 1 is largely launch-overhead-bound (the dense run measured ~29 ms/token with a
+  # 9-12 ms IQR on this machine), so decode ratios may not separate candidates; metric: prefill_ms is the alternative.
+  latency_target: {metric: decode_ms_per_token, max_ratio_vs_dense: 0.95}
+
+build:
+  pipeline_config: qwen3_1.7b_structured.yaml   # model, data_dir, pruning (structured, channel_multiple 64)
+  pipeline_overrides: []
+  domain_field: category     # STEM | Humanities | Social Sciences | Other
+  pool_split: probe          # MMLU test, 40 % stratified: searched by the sequential test
+  holdout_split: final       # MMLU test, remaining 60 %: final check only, never seen by the search
+  shots: 0                   # same 0-shot protocol as the existing pruning-time probes
+  max_seq_len: 2048
+  max_batch_tokens: 32768
+  calibration_seed: 0        # which C4 calibration windows structured Wanda uses
+  latency: {prompt_len: 512, gen_tokens: 128, warmup: 5, repeats: 20}
+  candidates:                # list order = search order; structured Wanda = pruning/wanda.py (MLP channels)
+    - {name: wsp30, kind: wanda, sparsity: 0.30}
+    - {name: wsp20, kind: wanda, sparsity: 0.20}
+    - {name: wsp15, kind: wanda, sparsity: 0.15}
+    - {name: wsp10, kind: wanda, sparsity: 0.10}
+    - {name: wsp05, kind: wanda, sparsity: 0.05}
+    - {name: wsp03, kind: wanda, sparsity: 0.03}   # 192 of 6144 channels per MLP (3.13 %; 64-channel multiples)
+    - {name: wsp02, kind: wanda, sparsity: 0.02}   # 128 of 6144 channels per MLP (2.08 %)
+    # new candidates go at the END: a model's search order is fixed when its cache file is written
+    # your own checkpoints:
+    # - {name: run_a, kind: masks, path: ~/cap-prune-runs/structured/cap_prune__t20__s0/masks/<state>.safetensors}
+    # - {name: ext_b, kind: hf_dir, path: D:/checkpoints/qwen3-1.7b-pruned-b}

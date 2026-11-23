@@ -1,0 +1,93 @@
+# Live gate experiment: Qwen3-1.7B structured MLP-channel pruning with rollback, three (+1) comparable arms.
+#
+#   A  llm_ppl     LLM proposer + paper perplexity gate (rollback if PPL rises > 15 % vs. parent)
+#   B  llm_cap     same LLM proposer + threshold-aware capability gate (paired loss vs. dense, exact bounds)
+#   C  greedy_cap  greedy sensitivity proposer (HeuristicController) + the same capability gate as B
+#   D  llm_cap_rr  same as B but round-robin question allocation (only allocation differs)
+#
+# All arms: same dense start, pruning operator (structured Wanda on MLP channels, 64-channel multiples),
+# action space (units L0.mlp..L27.mlp, per-step increment in [min_increment, max_increment]), calibration
+# windows (run seed), profiling settings and proposal budget (search.max_iterations).
+#
+# Data roles (disjoint):  pruning calibration = C4 train windows;  gate development = MMLU validation
+# (gate-design only);  pruning-time evaluation = MMLU test probe split (40 %) + C4 validation for PPL;
+# final audit = MMLU test final split (60 %, 5-shot), FreebaseQA eval, WikiText-2 test.
+#
+#   python -m capprune gate-design --config configs/gate_dev.yaml        # locks the gate settings below
+#   python -m capprune supervise   --config configs/live_gate.yaml       # dense + all arms, resumable
+#   python -m capprune live-bench  --config configs/live_gate.yaml       # interleaved dense-vs-pruned timing
+#   python -m capprune live-report --config configs/live_gate.yaml
+extends: qwen3_1.7b_structured.yaml
+
+experiment:
+  runs_dir: ~/cap-prune-runs/live-gate
+
+search:
+  max_iterations: 10          # proposal budget per arm (identical for every arm)
+  min_increment: 0.01         # ~64 of 6144 channels in one MLP
+  max_increment: 0.10         # ~640 channels: small, non-uniform steps
+  target_tolerance: 0.005
+  patience: null              # no early stop on rejections: every arm spends its full proposal budget
+  ppl_rollback_threshold: 0.15
+  verify_rollback: true       # exact weight digests: parent intact before each attempt, restored after rollback
+
+controller:
+  kind: llm
+  model: gemini-3-flash-preview
+  endpoints:
+    - name: gemini
+      api: openai
+      base_url: https://generativelanguage.googleapis.com/v1beta/openai
+      api_key_env: GEMINI_API_KEY
+      send_seed: false        # this endpoint rejects the 'seed' field
+  heuristic: {initial_gain: 0.01, grow: 1.25, shrink: 0.5, min_gain: 0.002, max_gain: 0.03, unit_increment: 0.05,
+              tabu_iterations: 2}
+
+testing:
+  policy: none                # the older Bayesian domain test is not used here
+
+gate:
+  kind: ppl                   # arm overrides below
+  capability:                 # LOCKED 2026-11-21 by `capprune gate-design --config configs/gate_dev.yaml` (dev data only)
+    policy: threshold_aware   # threshold_aware | round_robin | widest_interval
+    domain_field: category    # the four broad MMLU categories
+    domains: [STEM, Humanities, Social Sciences, Other]
+    tolerance: 0.03           # max loss vs. the dense model per category (0.03 = 3 accuracy points)
+    min_sample: 100
+    batch_size: 100
+    budget: 5614              # = the whole pruning-time pool: 4,000 certified high-churn 2-point profiles 0 % of the
+                              #   time; at the full pool the bound becomes exact, so no candidate ends inconclusive
+    alpha_false_accept: 0.05
+    alpha_false_reject: 0.05
+    spending: uniform         # power(rho=2) added < 10 points of acceptance
+    order_seed: 0             # each attempt's question order = f(order_seed, run seed, attempt number)
+    total_budget: null        # optional cap on questions over a whole search
+
+deploy:
+  check: "off"                # per-step latency checks would gate on timing noise; speed is measured at the end
+
+benchmark:
+  enabled: false              # replaced by `capprune live-bench` (interleaved dense / pruned measurements)
+
+live_bench: {prompt_len: 512, gen_tokens: 128, batch_size: 1, warmup: 5, repeats: 20,
+             max_noise: 0.10}         # dense IQR/median above this -> speed result reported as inconclusive
+
+methods:
+  dense: {kind: dense}
+  llm_ppl:
+    kind: search
+    overrides: {controller: {kind: llm}, gate: {kind: ppl}}
+  llm_cap:
+    kind: search
+    overrides: {controller: {kind: llm}, gate: {kind: capability, capability: {policy: threshold_aware}}}
+  greedy_cap:
+    kind: search
+    overrides: {controller: {kind: heuristic}, gate: {kind: capability, capability: {policy: threshold_aware}}}
+  llm_cap_rr:
+    kind: search
+    overrides: {controller: {kind: llm}, gate: {kind: capability, capability: {policy: round_robin}}}
+
+matrix:
+  methods: [dense, greedy_cap, llm_ppl, llm_cap, llm_cap_rr]
+  targets: [0.10]
+  seeds: [0]
