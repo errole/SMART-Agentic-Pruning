@@ -226,7 +226,19 @@ def _matched_signals_ordinary(root: Path, folder: str) -> list[str]:
     return out
 
 
-EXTRACTORS = {"population_regate": _population_regate, "pool_signals": _pool_signals, "screen_confirm": _screen_confirm,
+def _kl_probe_smoke(root: Path, folder: str) -> list[str]:
+    from .utils.checkpoint import CheckpointStore
+
+    out = []
+    for rd in sorted((root / folder).glob("*/journal.jsonl")):
+        S = CheckpointStore(rd.parent).load_latest()[0]["search"]
+        kp = S.get("kl_probe") or {}
+        out.append(f"{rd.parent.name}: stop {S['stop_reason']}, {S['questions']:,} questions charged "
+                   f"(KL probe {kp.get('paired_items_charged', 0):,}), probe picks {[c['rank'] for c in kp.get('choices', [])]}")
+    return out
+
+
+EXTRACTORS = {"kl_probe_smoke": _kl_probe_smoke, "population_regate": _population_regate, "pool_signals": _pool_signals, "screen_confirm": _screen_confirm,
               "matched_signals": _matched_signals, "matched_signals_ordinary": _matched_signals_ordinary, "search_runs": _search_runs, "ranked_run": _ranked_run, "boundary": _boundary, "compare": _compare,
               "ranker": _ranker, "fixed_state": _fixed_state, "gap": _gap, "adaptive_replay": _adaptive_replay,
               "gate_design": _gate_design}

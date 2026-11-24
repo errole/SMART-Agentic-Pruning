@@ -181,5 +181,15 @@ The expected lost and gained rates are p± = (q ± true loss)/2, and every bound
 This is a protocol for future runs. No confirmation has been run, and no confirmation item has been scored.
 
 The amendment-2 proposer is implemented in the live loop (`ranked_search.fallback_policy: kl_probe`, with
-`ranked_search.counterfactual` for the C6 log). It is tested on CPU (`tests/test_kl_probe.py`), and on Qwen3-1.7B it has
-been run only as a GPU smoke test. No confirmatory screening run has been made.
+`ranked_search.counterfactual` for the C6 log). It is tested on CPU (`tests/test_kl_probe.py`). On Qwen3-1.7B it has
+been run only as a GPU smoke test, which is not a result: `configs/kl_probe_smoke_qwen.yaml`,
+`~/cap-prune-runs/_smoke/kl-probe-qwen/`, commit `3e34d1e`, clean tree.
+* The rank-1 accept at attempt 1 was forced to a reject by the test hook.
+* The probe scored ranks 2–11 on 4,000 paired items plus 400 dense items in 35.7 s, and its KL pick (rank 3,
+  layers 24–27) was accepted.
+* The counterfactual scored 400 paired items in 4.9 s.
+* The 8,428 sealed final-split IDs were checked against the screening items.
+* Two earlier smoke launches failed before scoring anything: the sealed-file parser (`34de4e9`), then a syntax error
+  in its fix (`3e34d1e`). They are kept under `~/cap-prune-runs/_smoke/`.
+
+No confirmatory screening run has been made.
