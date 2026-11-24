@@ -1,0 +1,13 @@
+# Matched-compression signal test on ORDINARY parents (EXPLORATORY; plan: docs/matched_signal_plan_ordinary.md): the
+# ranker study's 13 trajectory parents x their 11 equal-size actions, with the same split, subsamples, signals, target and
+# baselines as the stall-parent test (configs/matched_signals.yaml), then compared with it parent by parent.
+#   python -m capprune matched-signals register --config configs/matched_signals_ordinary.yaml   # parent list + split, before scoring
+#   python -m capprune matched-signals score    --config configs/matched_signals_ordinary.yaml   # GPU: rebuild + verify, dense + 143
+#   python -m capprune matched-signals analyze  --config configs/matched_signals_ordinary.yaml   # CPU: the v1 analysis
+#   python -m capprune matched-signals compare  --config configs/matched_signals_ordinary.yaml   # CPU: parents as units, vs. stall
+extends: matched_signals.yaml
+
+matched_signals:
+  plan_file: ../docs/matched_signal_plan_ordinary.md
+  out_dir: ~/cap-prune-runs/matched-signals-ordinary
+  protocol_commit: 23f7cb278ae845c9194296e9b11e9ec5e2dcd7be   # docs/screen_confirm_protocol.md amendment 1, committed before this test

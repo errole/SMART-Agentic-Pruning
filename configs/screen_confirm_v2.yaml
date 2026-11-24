@@ -1,0 +1,9 @@
+# Screen-then-confirm protocol, amendment 1 (docs/screen_confirm_protocol.md): intersection-union pass decision per
+# checkpoint (every category's one-sided 95 % upper bound <= 3 points, no Bonferroni) and fixed-sequence testing over a
+# run's accepted checkpoints.  Confirmation sample sizes for this rule; the v1 outputs (confirmation_sizes.*) stay.
+#   python -m capprune screen-confirm sizes --config configs/screen_confirm_v2.yaml
+extends: screen_confirm.yaml
+
+screen_confirm:
+  rule: iut_fixed_sequence
+  output_suffix: _v2

@@ -1,5 +1,9 @@
 # Matched-compression signal test (2026-11-23, exploratory)
 
+> **Follow-up:** the same test on the ranker's 13 ordinary parents, and a parent-level comparison with these 3 stall
+> parents, is in [`matched_signals_ordinary.md`](matched_signals_ordinary.md). On ordinary parents, KL does not beat
+> gradient rank 1 where the gate accepts it. The KL advantage reported here comes from the stall parents.
+
 **Question.** At matched compression and with the same number of questions, does KL(dense ‖ pruned) pick actions that
 keep held-out flip loss lower than the gate's net-flip statistic does? If so, from which sample size?
 

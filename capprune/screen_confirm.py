@@ -1,12 +1,22 @@
-"""Confirmation sample sizes for the screen-then-confirm protocol (``capprune screen-confirm sizes``).
+"""The screen-then-confirm protocol's confirmation rule and sample sizes (``capprune screen-confirm sizes``).
 
-The confirmation is ONE test of the frozen final checkpoint against the dense model on fresh items: full alpha, Bonferroni
-over the categories, and per category the exact one-sided population upper bound of the rule v1 construction
-(``population_regate.population_bounds``: Clopper-Pearson on the lost and gained counts, union bound), with no
-spending over candidates or looks.  Sample sizes are computed per category from the paired disagreement rates recorded
-in ``population-regate/regate.json``.
+Per category, the bound is the exact one-sided population upper bound of the rule v1 construction
+(``population_regate.population_bounds``: Clopper-Pearson on the lost and gained counts, union bound), on fresh items,
+single look.
+
+* ``bonferroni`` (protocol v1, commit 15171d3): ONE test of the final checkpoint; pass if every category's bound at
+  delta = alpha / #categories is <= the tolerance.
+* ``iut_fixed_sequence`` (amendment 1): intersection-union test per checkpoint - pass only if EVERY category's bound
+  at delta = alpha is <= the tolerance (no Bonferroni for the decision; the simultaneous Bonferroni bounds are
+  reported as description only) - and fixed-sequence testing over a run's accepted checkpoints, ordered by parameters
+  removed (ascending) before any confirmation scoring, each at alpha, stopping at the first failure; the claim is the
+  last passing checkpoint.
+
+Sample sizes are computed per category from the paired disagreement rates recorded in ``population-regate/regate.json``.
 """
 from __future__ import annotations
+
+import json
 
 import numpy as np
 
@@ -14,9 +24,47 @@ from .config import resolve_path
 from .population_regate import population_bounds
 from .utils.io import atomic_write_json, atomic_write_text, read_json
 
+RULES = ("bonferroni", "iut_fixed_sequence")
+
 
 def certifies(n: int, kp: int, km: int, delta: float, tol: float) -> bool:
     return population_bounds(n, kp, km, delta, delta)[1] <= tol + 1e-12
+
+
+def decision_delta(rule: str, alpha: float, n_categories: int) -> float:
+    """The per-category one-sided error level of the pass decision."""
+    if rule not in RULES:
+        raise ValueError(f"unknown rule {rule}")
+    return alpha / n_categories if rule == "bonferroni" else alpha
+
+
+def iut_test(counts: dict[str, tuple[int, int, int]], alpha: float, tol: float) -> dict:
+    """Intersection-union test of one checkpoint. ``counts[category] = (n, lost, gained)`` on fresh items.
+    Pass only if every category's one-sided (1 - alpha) upper bound is <= ``tol``. The simultaneous (Bonferroni,
+    alpha / #categories) upper bounds are returned as description only."""
+    k = len(counts)
+    ub = {c: population_bounds(n, kp, km, alpha, alpha)[1] for c, (n, kp, km) in counts.items()}
+    ub_bonf = {c: population_bounds(n, kp, km, alpha / k, alpha / k)[1] for c, (n, kp, km) in counts.items()}
+    return {"pass": all(v <= tol + 1e-12 for v in ub.values()), "upper": ub, "upper_bonferroni_descriptive": ub_bonf,
+            "estimate": {c: (kp - km) / n for c, (n, kp, km) in counts.items()}}
+
+
+def fixed_sequence(checkpoints: list[dict], alpha: float, tol: float) -> dict:
+    """Fixed-sequence testing of a run's accepted checkpoints. ``checkpoints`` are in the order frozen before scoring
+    (ascending parameters removed; each ``{"id", "params_removed", "counts"}``). Each is tested at ``alpha`` with
+    ``iut_test``; testing stops at the first failure; the claim is the last passing checkpoint (None if the first
+    fails)."""
+    pr = [c["params_removed"] for c in checkpoints]
+    if pr != sorted(pr):
+        raise ValueError("checkpoints must be ordered by parameters removed (ascending) before testing")
+    tested, claim = [], None
+    for c in checkpoints:
+        r = iut_test(c["counts"], alpha, tol)
+        tested.append({"id": c["id"], "params_removed": c["params_removed"], **r})
+        if not r["pass"]:
+            break
+        claim = c["id"]
+    return {"claim": claim, "tested": tested, "untested": [c["id"] for c in checkpoints[len(tested):]]}
 
 
 def n_needed(q: float, mu: float, delta: float, tol: float, power: float | None = None, draws: int = 2000,
@@ -53,8 +101,9 @@ def sizes(cfg: dict) -> dict:
     final = next(a for a in A if a["attempt"] == int(sc["final_attempt"]))
     cats = list(final["full_pool_projection"])
     alpha, tol = float(sc["alpha"]), float(sc["tolerance"])
-    delta = alpha / len(cats)  # one test, Bonferroni over the categories
-    out = {"alpha": alpha, "delta_per_category": delta, "tolerance": tol, "source": str(resolve_path(cfg, sc["regate"])),
+    rule = sc.get("rule", "bonferroni")
+    delta = decision_delta(rule, alpha, len(cats))  # v1: one test, Bonferroni; IUT: alpha per category
+    out = {"rule": rule, "alpha": alpha, "delta_per_category": delta, "tolerance": tol, "source": str(resolve_path(cfg, sc["regate"])),
            "run": sc["run"], "final_attempt": int(sc["final_attempt"]), "categories": {}}
     for c in cats:
         qs = [a["full_pool_projection"][c]["q_disagree"] for a in A]
@@ -67,8 +116,10 @@ def sizes(cfg: dict) -> dict:
 
 
 def render(S: dict) -> str:
-    L = [f"Per-category one-sided bound at delta = {S['delta_per_category']:.4f} (alpha {S['alpha']} / {len(S['categories'])} "
-         f"categories), tolerance {100 * S['tolerance']:.1f} points. Rates: run {S['run']}'s final checkpoint (attempt "
+    how = (f"alpha {S['alpha']} / {len(S['categories'])} categories" if S.get("rule", "bonferroni") == "bonferroni"
+           else f"alpha {S['alpha']} per category: intersection-union test, no Bonferroni")
+    L = [f"Rule `{S.get('rule', 'bonferroni')}`. Per-category one-sided bound at delta = {S['delta_per_category']:.4f} ({how}), "
+         f"tolerance {100 * S['tolerance']:.1f} points. Rates: run {S['run']}'s final checkpoint (attempt "
          f"{S['final_attempt']}) and the median / maximum over the run's attempts. n50 = bound at the expected counts "
          "certifies (about 50 % power); n80 = 80 % of 2,000 seeded simulated samples certify. Steps of 50 items.", "",
          "| category | q final / median / max | true loss | n50 (final q) | n80 (final q) | n80 (median q) | n80 (max q) |",
@@ -85,6 +136,9 @@ def write_sizes(cfg: dict):
     S = sizes(cfg)
     out = resolve_path(cfg, cfg["screen_confirm"]["out_dir"])
     out.mkdir(parents=True, exist_ok=True)
-    atomic_write_json(out / "confirmation_sizes.json", S)
-    atomic_write_text(out / "confirmation_sizes.md", render(S))
-    return out / "confirmation_sizes.md"
+    stem = "confirmation_sizes" + cfg["screen_confirm"].get("output_suffix", "")
+    if (out / f"{stem}.json").exists() and read_json(out / f"{stem}.json") != json.loads(json.dumps(S)):
+        raise SystemExit(f"{stem}.json exists with different content; write-once (use a new output_suffix)")
+    atomic_write_json(out / f"{stem}.json", S)
+    atomic_write_text(out / f"{stem}.md", render(S))
+    return out / f"{stem}.md"
