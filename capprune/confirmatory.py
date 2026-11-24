@@ -433,10 +433,9 @@ def confirm(cfg: dict, batch: str) -> Path:
     from .config import data_dir
     from .data.prepare import PreparedData
     from .gradient_audit import size_check
-    from .gradient_live import load_dense_copy
     from .model import build_units, load_model, load_tokenizer, tokenizer_id
     from .pool_signals import LogprobScorer
-    from .pruning.masks import DenseStore, PruneState
+    from .pruning.masks import PruneState
     from .pruning.materialize import materialize
     from .screen_confirm import fixed_sequence, iut_test
     from .utils.cache import KVCache
@@ -455,13 +454,15 @@ def confirm(cfg: dict, batch: str) -> Path:
     alpha, tol = float(C["alpha"]), float(C["tolerance"])
     rc = _run_rc(cfg)
     data = PreparedData(data_dir(rc), tokenizer_id(rc))
-    tok, model = load_tokenizer(rc), load_model(rc)
-    model.eval()
+    # ONE dense model, never modified: every checkpoint is materialised from it (kept channels keep their dense weights,
+    # exactly as in the masked model), so only the dense model and one materialised copy are on the GPU at a time
+    tok, dm = load_tokenizer(rc), load_model(rc)
+    dm.eval()
+    for prm in dm.parameters():
+        prm.requires_grad_(False)
     mode = rc["pruning"]["mode"]
-    units = build_units(model, mode, rc["pruning"].get("eligible", []))
-    dense_store = DenseStore(units)
-    dm = load_dense_copy(rc, model, units, dense_store)
-    dev = next(model.parameters()).device
+    units = build_units(dm, mode, rc["pruning"].get("eligible", []))
+    dev = next(dm.parameters()).device
     t = rc["testing"]
     shots, max_len, mbt = int(t.get("shots", 0)), int(rc["model"].get("max_seq_len", 2048)), int(t.get("max_batch_tokens", 32768))
     from .adaptive.evaluator import question_order
@@ -526,11 +527,10 @@ def confirm(cfg: dict, batch: str) -> Path:
         seq = []
         for ck in o["order"]:
             st = PruneState(units, mode)
-            st.load(ck["mask_file"])
-            st.apply(dense_store)
-            mat, _ = materialize(model, st, rc)
+            st.load(ck["mask_file"])  # masks only; the dense model's weights are not touched
+            mat, _ = materialize(dm, st, rc)
             mat.eval()
-            sz = size_check(rc, dm, model, mat, st, units)
+            sz = size_check(rc, dm, dm, mat, st, units)  # kept rows / columns == the dense weights at those indices
             D, T = score_pair(ck["mask_hash"], mat)
             counts = _paired_counts(D, T, rows, field)
             r = iut_test(counts, alpha, tol)
@@ -549,9 +549,9 @@ def confirm(cfg: dict, batch: str) -> Path:
         if last is not None and last["position"] not in {x["position"] for x in tested}:
             st = PruneState(units, mode)
             st.load(last["mask_file"])
-            st.apply(dense_store)
-            mat, _ = materialize(model, st, rc)
-            sz = size_check(rc, dm, model, mat, st, units)
+            mat, _ = materialize(dm, st, rc)
+            mat.eval()
+            sz = size_check(rc, dm, dm, mat, st, units)
             D, T = score_pair(last["mask_hash"], mat)
             counts = _paired_counts(D, T, rows, field)
             final_desc = {**{k: last[k] for k in ("position", "attempt", "params_removed", "mlp_sparsity", "pool_loss")},
