@@ -198,3 +198,111 @@ def test_analyze_end_to_end_on_synthetic_scores(tmp_path):
     atomic_write_json(tmp_path / "split.json", body)
     with pytest.raises(SystemExit):
         ms.analyze(cfg)
+
+
+# ---------------------------------------------------------------------------------------------------------- plan v2: compare
+def test_sign_test_and_recommendation_rule():
+    from capprune.matched_signals import recommend, sign_test
+
+    assert sign_test(0, 0) == 1.0 and sign_test(6, 6) == 1.0
+    assert sign_test(10, 2) == pytest.approx(2 * (1 + 12 + 66) / 4096)
+    assert sign_test(3, 0) == pytest.approx(0.25)
+
+    def rows(r_kl, s_kl):  # rank-1 regret 0.02 on rejected parents, 0.0 on accepted ones
+        return ([{"rank1_accepted": False, "kl": x, "rank1": 0.02} for x in r_kl]
+                + [{"rank1_accepted": True, "kl": x, "rank1": 0.0} for x in s_kl])
+
+    assert recommend(rows([0.03, 0.03, 0.0], [0.0] * 5))["policy"] == "gradient only"         # KL not better after rejection
+    assert recommend(rows([0.0, 0.01, 0.0], [0.0] * 5))["policy"] == "KL only after a rank-1 rejection"  # ties where rank 1 works
+    assert recommend(rows([0.0, 0.01], [0.0, 0.0, 0.01]))["policy"] == "KL only after a rank-1 rejection"
+    # KL can only tie or lose to rank 1 when rank 1 is the best action (regret 0), so "KL everywhere" needs rank 1 to be
+    # suboptimal on the accepted parents
+    acc = [{"rank1_accepted": True, "kl": 0.0, "rank1": 0.01}] * 3 + [{"rank1_accepted": True, "kl": 0.01, "rank1": 0.0}]
+    rej = [{"rank1_accepted": False, "kl": 0.0, "rank1": 0.02}]
+    r = recommend(acc + rej)
+    assert r["policy"] == "KL everywhere" and r["S"] == {"parents": 4, "kl_better": 3, "kl_worse": 1, "kl_tie": 0,
+                                                          "mean_kl_minus_rank1": pytest.approx(-0.005)}
+
+
+def _synthetic_group(out, P, pool, parents, seed):
+    """Write registration, split, scores and manifest for a group. ``parents[name] = (losses, kls, gates)``: per action
+    (in gradient-rank order) the share of dense-correct items it flips, an extra KL term, and the gate decision."""
+    import hashlib
+    import json
+
+    from capprune import matched_signals as ms
+    from capprune.utils.io import atomic_write_json, sha256_file
+
+    out.mkdir(parents=True)
+    split = ms.make_split(pool, int(P["split_seed"]))
+    body = {"split_seed": P["split_seed"], "pool_items": sum(map(len, pool.values())), **split}
+    atomic_write_json(out / "split.json", body)
+    reg = {"plan_file": "plan.md", "plan_sha256_lf": ms.plan({"_config_dir": str(out.parent), "matched_signals": {
+        "plan_file": str(out.parent / "plan.md")}})[1], "plan_committed_in": "0" * 40,
+        "split_sha256": hashlib.sha256(json.dumps(body, sort_keys=True).encode()).hexdigest(), "protocol_commit": None}
+    atomic_write_json(out / "registration.json", reg)
+    qids = [q for c in sorted(pool) for q in pool[c]]
+    rng = np.random.default_rng(seed)
+    n = len(qids)
+    ans = rng.integers(0, 4, n)
+    dense = np.full((n, 4), -3.0)
+    dense[np.arange(n), ans] = -0.2
+    arrays = {"qid": np.array(qids), "category": np.array([q[:3] for q in qids]), "answer": ans.astype(np.int8),
+              "logp__dense": dense.astype(np.float32), "correct__dense": np.ones(n, np.int8)}
+    cands = []
+    for p, (losses, kls, gates) in parents.items():
+        for j, (loss, kl, gate) in enumerate(zip(losses, kls, gates)):
+            h = f"{p}-{j:02d}"
+            lp = dense.copy()
+            lost = rng.random(n) < loss
+            lp[lost, ans[lost]] = -4.0
+            lp[:, (ans + 1) % 4] += -kl
+            arrays[f"logp__{h}"] = lp.astype(np.float32)
+            arrays[f"correct__{h}"] = (lp.argmax(1) == ans).astype(np.int8)
+            cands.append({"parent": p, "rank": j + 1, "kind": "k", "layers": [j], "z_g_mean": float(j), "mask_hash": h,
+                          "diagnostic_decision": gate})
+    np.savez_compressed(out / "logprobs.npz", **arrays)
+    atomic_write_json(out / "manifest.json", {
+        "registration": reg, "commit": "x" * 40, "clean_tree": True, "reuse": {"used": False}, "candidates": cands,
+        "item_model_evaluations_run": {"dense": n}, "answers_reused": {}, "gpu_seconds": {"dense": 1.0, "x": 41.0},
+        "wall_s": 1.0, "npz_sha256": sha256_file(out / "logprobs.npz"), "pool_items": n})
+
+
+def test_compare_end_to_end_on_synthetic_groups(tmp_path, monkeypatch):
+    import json
+
+    from capprune import matched_signals as ms
+
+    params = {"plan_version": 2, "source": "ranker", "split_seed": 20261123, "subsample_seed": 7, "sizes": [100, 200],
+              "draws": 3, "tolerance": 0.03, "signals": ["S0", "S2", "S1c"], "stall_analysis": "stall/analysis.json",
+              "recommendation_n": 100, "gate_cost_runs": {}, "ranker_decisions": "none.json"}
+    (tmp_path / "plan.md").write_text("# plan\n\n```json\n" + json.dumps(params) + "\n```\n", encoding="utf-8")
+    pool = {c: [f"{c[:3]}-{i:05d}" for i in range(900)] for c in ("Humanities", "Other", "STEM", "Social Sciences")}
+    good = [0.0] + [0.02 + 0.01 * j for j in range(10)]        # rank 1 is the best action and has the lowest KL
+    rising = [0.002 * j for j in range(11)]
+    bad_r1 = [0.20] + [0.01 * j for j in range(10)]           # rank 1 loses 10 points; rank 2 is the best
+    _synthetic_group(tmp_path / "ordinary", params, pool, {"O1": (good, rising, ["accept"] * 11),
+                                                           "O2": (good, rising, ["accept"] * 11)}, 1)
+    _synthetic_group(tmp_path / "stall", params, pool, {s: (bad_r1, [0.1] + rising[1:], ["reject"] + ["accept"] * 10)
+                                                        for s in ("S1", "S2")}, 2)
+    monkeypatch.setattr(ms, "_gate_costs", lambda root, P: {"x": {"n": 3, "median": 2000.0, "q25": 1500.0, "q75": 2500.0,
+                                                                   "mean": 2000.0}})
+
+    def cfg(name):
+        return {"_config_dir": str(tmp_path), "matched_signals": {"plan_file": str(tmp_path / "plan.md"),
+                                                                  "out_dir": str(tmp_path / name), "runs_root": str(tmp_path)}}
+
+    ms.analyze(cfg("ordinary"))
+    ms.analyze(cfg("stall"))
+    md = ms.compare(cfg("ordinary"))
+    S = json.loads((tmp_path / "ordinary" / "comparison.json").read_text(encoding="utf-8"))
+    assert md.exists() and S["recheck_max_abs_dev"]["ordinary"] < 1e-12
+    assert S["groups"] == {"ordinary": ["O1", "O2"], "stall": ["S1", "S2"], "all": ["O1", "O2", "S1", "S2"]}
+    lead = S["lead"]["gate accepted rank 1"]
+    assert lead["parents"] == ["O1", "O2"]
+    for n in ("100", "200"):
+        assert lead["by_n"][n]["kl_matches"] == 2 and lead["by_n"][n]["kl_worse"] == 0   # KL picks rank 1 where it is best
+        assert lead["by_n"][n]["kl_picks_rank1_share"] == pytest.approx(1.0)
+    assert S["per_parent"]["S1"]["rank1_regret"] > 0.05 and S["per_parent"]["S1"]["regret"]["S2"]["100"] < 0.02
+    assert S["recommendation"]["policy"] == "KL only after a rank-1 rejection"
+    assert S["cost"]["probe_paired_items_per_step"]["100"] == 4400

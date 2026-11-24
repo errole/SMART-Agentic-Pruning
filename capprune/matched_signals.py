@@ -169,6 +169,8 @@ def register(cfg: dict) -> Path:
     sp = out / "split.json"
     body = {"split_seed": P["split_seed"], "pool_items": len(pool), **split}
     split_sha = hashlib.sha256(json.dumps(body, sort_keys=True).encode()).hexdigest()
+    if P.get("split_sha256_must_equal") and split_sha != P["split_sha256_must_equal"]:
+        raise SystemExit(f"split {split_sha[:16]} differs from the required {P['split_sha256_must_equal'][:16]}")
     if reg.exists():
         old = read_json(reg)
         if old["plan_sha256_lf"] != plan_sha or old["split_sha256"] != split_sha:
@@ -186,6 +188,8 @@ def register(cfg: dict) -> Path:
            "split_file": str(sp), "split_sha256": split_sha, "split_file_sha256": sha256_file(sp),
            "split_sizes": {h: {c: len(v) for c, v in split[h].items()} for h in ("half1", "half2")},
            "protocol_commit": _ms(cfg).get("protocol_commit"), "registered_at": time.time()}
+    if P.get("parents"):
+        rec["parents"] = P["parents"]
     atomic_write_json(reg, rec)
     return reg
 
@@ -398,9 +402,131 @@ def score(cfg: dict) -> Path:
             dcon.close()
             rcon.close()
 
+    # ---- ordinary parents (plan v2, source "ranker"): the ranker kept no masks or profiles, so every trajectory is
+    #      rebuilt from dense - profile the parent (the ranker's activation subset), rebuild each shortlisted action on the
+    #      parent's weights, follow the trajectory's chosen action - and every parent and candidate mask must equal the
+    #      ranker's recorded hash. Pass 1 rebuilds and verifies everything; pass 2 scores from the verified masks.
+    built: dict[int, dict] = {}
+    source_info: dict = {}
+
+    def ranker_build() -> None:
+        from .gradient_live import rank_gradient
+        from .pruning.profile import collect_act_sqnorm
+        from .pruning.wanda import raise_unit
+
+        dpath = root / P["ranker_decisions"]
+        source_info.update(ranker_decisions=str(dpath), ranker_decisions_sha256=sha256_file(dpath))
+        decs = read_json(dpath)["decisions"]
+        want = {int(p["decision"]): p for p in P["parents"]}
+        for p in P["parents"]:
+            d = decs[int(p["decision"])]
+            if (d["trajectory"], int(d["step"]), d["parent_mask"]) != (p["trajectory"], int(p["step"]), p["parent_mask"]):
+                raise RuntimeError(f"{p['name']}: the registered parent is not decision {p['decision']}")
+            if p["parent_mask"] in set(P.get("exclude_parent_masks", [])):
+                raise RuntimeError(f"{p['name']}: an excluded parent")
+        pp = rc["profiling"]
+        calib = data.calibration_pool[data.calibration_indices(int(rc["run"]["seed"]), int(rc["data"]["calibration"]["num_samples"]))]
+        prng = np.random.default_rng([int(rc["ranker"].get("profile_seed", 0)), 1, 17])  # = ranker.collect's profile()
+        a_idx = np.sort(prng.choice(calib.shape[0], size=min(int(pp["activation_samples"]), calib.shape[0]), replace=False))
+
+        def state_of(parent, act, action):  # = ranker.collect's state_of, built while the model holds the parent's weights
+            st = PruneState(units, mode)
+            st.masks = {n: m.clone() for n, m in parent.masks.items()}
+            before = {u: int((~st.masks[u]).sum().item()) for u in action}
+            for u, b in action.items():
+                raise_unit(st, u, (before[u] / geo["mult"] + b) / geo["B"], act, rc)
+            real = {u: (int((~st.masks[u]).sum().item()) - before[u]) // geo["mult"] for u in action}
+            if real != action:
+                raise RuntimeError(f"realised {real} != requested {action}")
+            return st
+
+        by_traj: dict[str, dict[int, int]] = {}
+        for i, d in enumerate(decs):
+            if d["group"] in ("D0", "new"):
+                by_traj.setdefault(d["trajectory"], {})[int(d["step"])] = i
+        acts = {}
+        for traj in sorted(by_traj):
+            steps = by_traj[traj]
+            st = PruneState(units, mode)
+            for step in sorted(steps):
+                i = steps[step]
+                d = decs[i]
+                st.apply(dense)
+                ph = mask_hash(st)
+                if ph != d["parent_mask"]:
+                    raise RuntimeError(f"{traj} step {step}: rebuilt parent {ph} != recorded {d['parent_mask']}")
+                if ph not in acts:
+                    t0 = _clock(dev)
+                    acts[ph] = collect_act_sqnorm(model, st, calib[a_idx], {}, None, int(pp.get("activation_batch_size", 4)))
+                    log.info("profiled %s step %d (%s) in %.1f s", traj, step, ph, _clock(dev) - t0)
+                act = acts[ph]
+                nxt = decs[steps[step + 1]]["parent_mask"] if step + 1 in steps else None
+                todo = [c for c in d["candidates"] if i in want or c["mask"] == nxt]
+                states = {}
+                for c in todo:
+                    cst = state_of(st, act, c["action"])
+                    h = mask_hash(cst)
+                    if h != c["mask"] or canon(c["action"]) != c["action_key"]:
+                        raise RuntimeError(f"{traj} step {step} {c['kind']}: rebuilt mask {h} != recorded {c['mask']}")
+                    states[c["mask"]] = cst
+                if i in want:
+                    p = want[i]
+                    order = rank_gradient(d["candidates"])
+                    rank = {j: r + 1 for r, j in enumerate(order)}
+                    built[i] = {"parent": p, "parent_masks": {n: m.clone() for n, m in st.masks.items()}, "cands": []}
+                    for j, c in enumerate(d["candidates"]):
+                        cst = states[c["mask"]]
+                        built[i]["cands"].append({"c": c, "rank": rank[j], "unit_masks": {u: cst.masks[u].clone() for u in c["action"]},
+                                                  "sparsity": cst.global_sparsity()})
+                        checks.append({"parent": p["name"], "rank": rank[j], "mask_hash": c["mask"], "recorded_mask_match": True,
+                                       "parent_mask_match": True, "channels": int(c["channels_removed"]),
+                                       "ranker_gate": c["gate"]["decision"]})
+                        cands.append({"parent": p["name"], "parent_id": d["parent_mask"], "trajectory": traj, "step": step,
+                                      "decision": i, "rank": rank[j], "kind": c["kind"], "layers": c["layers"],
+                                      "action_key": c["action_key"], "z_g_mean": float(c["features"]["z_g_mean"]),
+                                      "mask_hash": c["mask"], "channels": int(c["channels_removed"]),
+                                      "mlp_sparsity": cst.global_sparsity(), "diagnostic_decision": c["gate"]["decision"],
+                                      "ranker_gate_questions": int(c["gate"]["questions"])})
+                if nxt is not None:
+                    st = states[nxt]
+        if set(built) != set(want):
+            raise RuntimeError(f"parents not reached: {sorted(set(want) - set(built))}")
+
+    def walk_ranker(score_it: bool) -> None:
+        if not score_it:
+            ranker_build()
+            return
+        for p in P["parents"]:
+            b = built[int(p["decision"])]
+            state = PruneState(units, mode)
+            state.masks = {n: m.clone() for n, m in b["parent_masks"].items()}
+            state.apply(dense)
+            if mask_hash(state) != p["parent_mask"]:
+                raise RuntimeError(f"{p['name']}: parent mask changed between passes")
+            digest = weights_digest(state)
+            for e in b["cands"]:
+                c, changed = e["c"], list(e["unit_masks"])
+                parent_masks = {u: state.masks[u] for u in changed}
+                for u in changed:
+                    state.masks[u] = e["unit_masks"][u].clone()
+                state.apply(dense, only=changed)
+                h = mask_hash(state)
+                if h != c["mask"]:
+                    raise RuntimeError(f"{p['name']} rank {e['rank']}: mask changed between passes")
+                if h not in res:
+                    run_model(h, LogprobScorer(model, tok, data.mmlu_fewshot, shots, max_len, mbt))
+                log.info("%s rank %d %s: %d scored, %d reused, %.1f s", p["name"], e["rank"], h, evals[h], reused[h], secs[h])
+                for u in changed:
+                    state.masks[u] = parent_masks[u]
+                state.apply(dense, only=changed)
+                if weights_digest(state) != digest:
+                    raise RuntimeError("parent not restored exactly after a candidate")
+
+    if P.get("source", "stall") == "ranker":
+        walk = walk_ranker  # noqa: F811
     cands, checks = [], []
     walk(False)
-    log.info("verified %d candidates of %d parents against the journals and the stall diagnostics", len(cands), len(P["parents"]))
+    log.info("verified %d candidates of %d parents against the recorded masks", len(cands), len(P["parents"]))
     # ---- reuse gate: re-score the first batch of every category with the dense model; the cache must reproduce it exactly
     dsc = LogprobScorer(dm, tok, data.mmlu_fewshot, shots, max_len, mbt)
     if reuse["eligible"]:
@@ -435,7 +561,8 @@ def score(cfg: dict) -> Path:
            "protocol": {**protocol, "logprob": "full-vocabulary log-softmax at the last position, letters A-D"},
            "pool_items": len(qids), "pool_sha16": pool_sha, "reuse": {k: v for k, v in reuse.items() if k != "models"},
            "verification": checks, "candidates": cands, "item_model_evaluations_run": evals, "answers_reused": reused,
-           "gpu_seconds": secs, "wall_s": time.time() - t_all, "npz_sha256": sha256_file(out / "logprobs.npz")}
+           "gpu_seconds": secs, "wall_s": time.time() - t_all, "npz_sha256": sha256_file(out / "logprobs.npz"),
+           "source": {"kind": P.get("source", "stall"), **source_info}}
     atomic_write_json(out / "manifest.json", man)
     del model, dm
     torch.cuda.empty_cache() if torch.cuda.is_available() else None
@@ -586,4 +713,242 @@ def render(S: dict) -> str:
         for c in sorted(cs, key=lambda c: c["rank"]):
             L.append(f"| {p} | {c['rank']} | {c['kind']} | {c['layers']} | {c['diagnostic_decision']} | {pt(c['half2_worst'])} | "
                      f"{pt(max(v['S0'] for v in c['half1_full'].values()))} | {max(v['S2'] for v in c['half1_full'].values()):.4f} |")
+    return "\n".join(L) + "\n"
+
+
+# ============================================================================ compare (CPU): parents as units (plan v2)
+def sign_test(better: int, worse: int) -> float:
+    """Two-sided exact binomial sign test (p = 1/2) on the non-tied units."""
+    from math import comb
+
+    m = better + worse
+    if m == 0:
+        return 1.0
+    k = min(better, worse)
+    return min(1.0, 2 * sum(comb(m, i) for i in range(k + 1)) / 2 ** m)
+
+
+def recommend(rows: list[dict]) -> dict:
+    """The plan's rule. ``rows``: per parent {"rank1_accepted": bool, "kl": regret, "rank1": regret} at the
+    recommendation n."""
+    R = [r for r in rows if not r["rank1_accepted"]]
+    S = [r for r in rows if r["rank1_accepted"]]
+    r_better = sum(r["kl"] < r["rank1"] - 1e-12 for r in R)
+    s_better = sum(r["kl"] < r["rank1"] - 1e-12 for r in S)
+    s_worse = sum(r["kl"] > r["rank1"] + 1e-12 for r in S)
+    s_mean = float(np.mean([r["kl"] - r["rank1"] for r in S])) if S else float("nan")
+    if not r_better > len(R) / 2:
+        policy = "gradient only"
+    elif s_better > s_worse and s_mean < 0:
+        policy = "KL everywhere"
+    else:
+        policy = "KL only after a rank-1 rejection"
+    return {"policy": policy, "R": {"parents": len(R), "kl_better": r_better},
+            "S": {"parents": len(S), "kl_better": s_better, "kl_worse": s_worse, "kl_tie": len(S) - s_better - s_worse,
+                  "mean_kl_minus_rank1": s_mean}}
+
+
+def _group_choices(out: Path, split: dict, P: dict) -> dict:
+    """Recompute every signal's choice per (parent, n, draw) from the saved log-probabilities (same functions and seeds
+    as ``analyze``) and check the regrets against that group's analysis.json."""
+    man, A = read_json(out / "manifest.json"), read_json(out / "analysis.json")
+    if sha256_file(out / "logprobs.npz") != man["npz_sha256"]:
+        raise SystemExit(f"{out}: logprobs.npz changed after scoring")
+    Z = np.load(out / "logprobs.npz")
+    pos = {q: i for i, q in enumerate(Z["qid"].tolist())}
+    N, cats, tol = len(pos), sorted(split["half1"]), float(P["tolerance"])
+
+    def sel_of(qids):
+        m = np.zeros(N, bool)
+        m[[pos[q] for q in qids]] = True
+        return m
+
+    h2 = {k: sel_of(split["half2"][k]) for k in cats}
+    ans = Z["answer"].astype(int)
+    by_parent: dict[str, list[dict]] = {}
+    for c in man["candidates"]:
+        by_parent.setdefault(c["parent"], []).append(c)
+    terms = {c["mask_hash"]: item_terms(Z["logp__dense"], Z[f"logp__{c['mask_hash']}"], ans, Z["correct__dense"],
+                                        Z[f"correct__{c['mask_hash']}"]) for c in man["candidates"]}
+    worst = {h: max(float(t["flip"][h2[k]].mean()) for k in cats) for h, t in terms.items()}
+    info = {}
+    for p, cs in by_parent.items():
+        r1 = next(c for c in cs if c["rank"] == 1)
+        best = min(worst[c["mask_hash"]] for c in cs)
+        info[p] = {"rank1_accepted": r1["diagnostic_decision"] == "accept", "rank1_worst": worst[r1["mask_hash"]],
+                   "best_worst": best, "rank1_regret": worst[r1["mask_hash"]] - best,
+                   "rank1_passes": worst[r1["mask_hash"]] <= tol + 1e-12, "n_actions": len(cs),
+                   "random_regret": float(np.mean([worst[c["mask_hash"]] for c in cs])) - best, "choices": {}}
+    stored = {(r["parent"], r["n"], r["draw"]): r["regret"] for r in A["rows"]}
+    max_dev = 0.0
+    for n in P["sizes"]:
+        for d in range(int(P["draws"])):
+            sub = subsample(split["half1"], int(n), d, int(P["subsample_seed"]))
+            sel = {k: sel_of(sub[k]) for k in cats}
+            for p, cs in by_parent.items():
+                vals = [{k: signal_means(terms[c["mask_hash"]], sel[k]) for k in cats} for c in cs]
+                ranks = [c["rank"] for c in cs]
+                for s in SIGNALS:
+                    j = choose([float(np.nanmax([v[k][s] for k in cats])) for v in vals], ranks)
+                    w = worst[cs[j]["mask_hash"]]
+                    info[p]["choices"].setdefault(s, {}).setdefault(int(n), []).append({"rank": cs[j]["rank"], "worst": w})
+                    max_dev = max(max_dev, abs((w - info[p]["best_worst"]) - stored[(p, int(n), d)][s]))
+    if max_dev > 1e-9:
+        raise RuntimeError(f"{out}: recomputed regrets differ from analysis.json by {max_dev}")
+    return {"parents": info, "analysis": A, "manifest": man, "recheck_max_abs_dev": max_dev}
+
+
+def _gate_costs(root: Path, P: dict) -> dict:
+    out = {}
+    for name, run in P["gate_cost_runs"].items():
+        out[f"live run {name} (questions per attempt)"] = [a["gate"]["questions"] for a in _attempts(root / run).values()]
+    D = read_json(root / P["ranker_decisions"])["decisions"]
+    out["ranker gate replays (questions per candidate)"] = [c["gate"]["questions"] for d in D if d["group"] != "dev"
+                                                            for c in d["candidates"]]
+    return {k: {"n": len(v), "median": float(np.median(v)), "q25": float(np.percentile(v, 25)),
+                "q75": float(np.percentile(v, 75)), "mean": float(np.mean(v))} for k, v in out.items()}
+
+
+def compare(cfg: dict) -> Path:
+    P, reg, split = check(cfg)
+    out = out_dir(cfg)
+    root = resolve_path(cfg, _ms(cfg)["runs_root"])
+    stall_dir = (root / P["stall_analysis"]).parent
+    sreg = read_json(stall_dir / "registration.json")
+    if sreg["split_sha256"] != reg["split_sha256"]:
+        raise SystemExit("the stall parents were analysed on a different split")
+    G = {"ordinary": _group_choices(out, split, P), "stall": _group_choices(stall_dir, split, P)}
+    tol, sizes = float(P["tolerance"]), [int(n) for n in P["sizes"]]
+    per = {}
+    for g, X in G.items():
+        for p, v in X["parents"].items():
+            row = {"group": g, **{k: v[k] for k in ("rank1_accepted", "rank1_worst", "best_worst", "rank1_regret",
+                                                     "rank1_passes", "random_regret", "n_actions")},
+                   "regret": {}, "kl_pass_share": {}, "s0_pass_share": {}, "kl_picks_rank1_share": {}}
+            for n in sizes:
+                for s in SIGNALS:
+                    row["regret"].setdefault(s, {})[n] = float(np.mean([c["worst"] for c in v["choices"][s][n]])) - v["best_worst"]
+                row["kl_pass_share"][n] = float(np.mean([c["worst"] <= tol + 1e-12 for c in v["choices"]["S2"][n]]))
+                row["s0_pass_share"][n] = float(np.mean([c["worst"] <= tol + 1e-12 for c in v["choices"]["S0"][n]]))
+                row["kl_picks_rank1_share"][n] = float(np.mean([c["rank"] == 1 for c in v["choices"]["S2"][n]]))
+            per[p] = row
+    groups = {"ordinary": [p for p in per if per[p]["group"] == "ordinary"],
+              "stall": [p for p in per if per[p]["group"] == "stall"]}
+    groups["all"] = groups["ordinary"] + groups["stall"]
+    refs = {"gradient rank 1": "rank1_regret", "random (expected)": "random_regret"}
+
+    def reg_of(p, s, n):
+        return per[p]["regret"][s][n] if s in SIGNALS else per[p][refs[s]]
+
+    tables, signs, lead = {}, {}, {}
+    for g, ps in groups.items():
+        tables[g] = {n: {s: float(np.mean([reg_of(p, s, n) for p in ps])) for s in (*SIGNALS, *refs)} for n in sizes}
+        for other in ("S0", "gradient rank 1"):
+            for n in sizes:
+                d = [reg_of(p, "S2", n) - reg_of(p, other, n) for p in ps]
+                b, w = sum(x < -1e-12 for x in d), sum(x > 1e-12 for x in d)
+                signs[f"{g}|KL vs {other}|{n}"] = {"parents": len(ps), "kl_better": b, "tie": len(ps) - b - w, "kl_worse": w,
+                                                   "mean_diff": float(np.mean(d)), "p_two_sided": sign_test(b, w)}
+    for label, key in (("gate accepted rank 1", "rank1_accepted"), ("rank 1 passes half 2", "rank1_passes")):
+        ps = [p for p in groups["all"] if per[p][key]]
+        lead[label] = {"parents": ps, "by_n": {}}
+        for n in sizes:
+            d = [reg_of(p, "S2", n) - per[p]["rank1_regret"] for p in ps]
+            b, w = sum(x < -1e-12 for x in d), sum(x > 1e-12 for x in d)
+            lead[label]["by_n"][n] = {
+                "kl_beats": b, "kl_matches": len(ps) - b - w, "kl_worse": w,
+                "mean_diff": float(np.mean(d)) if d else None, "p_two_sided": sign_test(b, w),
+                "kl_choice_pass_share": float(np.mean([per[p]["kl_pass_share"][n] for p in ps])) if ps else None,
+                "rank1_pass_share": float(np.mean([per[p]["rank1_passes"] for p in ps])) if ps else None,
+                "kl_picks_rank1_share": float(np.mean([per[p]["kl_picks_rank1_share"][n] for p in ps])) if ps else None}
+    nrec = int(P["recommendation_n"])
+
+    def rec_rows(n):
+        return [{"rank1_accepted": per[p]["rank1_accepted"], "kl": per[p]["regret"]["S2"][n], "rank1": per[p]["rank1_regret"]}
+                for p in groups["all"]]
+
+    rec = {**recommend(rec_rows(nrec)), "n": nrec, "by_n": {n: recommend(rec_rows(n))["policy"] for n in sizes},
+           "rejected_parents_kl_picks_rank1_share": {n: float(np.mean([per[p]["kl_picks_rank1_share"][n] for p in groups["all"]
+                                                                        if not per[p]["rank1_accepted"]])) for n in sizes}}
+    man = G["ordinary"]["manifest"]
+    sec_per_item = float(np.median([s / man["pool_items"] for k, s in man["gpu_seconds"].items() if k != "dense"]))
+    cost = {"probe_paired_items_per_step": {n: 11 * 4 * n for n in sizes},
+            "probe_dense_items_per_step_if_not_cached": {n: 4 * n for n in sizes},
+            "probe_gpu_s_per_step_est": {n: 11 * 4 * n * sec_per_item for n in sizes},
+            "gpu_s_per_item_model_evaluation": sec_per_item, "gate_paired_questions_per_candidate": _gate_costs(root, P)}
+    S = {"label": "EXPLORATORY: parents are the unit of evidence; half-2 net flip loss on the gate pool; no audit sets",
+         "registration": reg, "plan": P, "stall_registration": sreg, "per_parent": per, "groups": groups,
+         "regret_tables": tables, "sign_tests": signs, "lead": lead, "recommendation": rec, "cost": cost,
+         "recheck_max_abs_dev": {g: X["recheck_max_abs_dev"] for g, X in G.items()},
+         "commit": _git("rev-parse", "HEAD"), "clean_tree": _git("status", "--porcelain") == ""}
+    atomic_write_json(out / "comparison.json", S)
+    atomic_write_text(out / "comparison.md", render_compare(S))
+    return out / "comparison.md"
+
+
+def render_compare(S: dict) -> str:
+    P = S["plan"]
+    sizes = [int(n) for n in P["sizes"]]
+    lo, hi = min(sizes), max(sizes)
+    pt = lambda v: "n/a" if v is None else f"{100 * v:+.2f}"  # noqa: E731
+    rec, lead, cost = S["recommendation"], S["lead"], S["cost"]
+    reg = S["registration"]
+    L = ["# Matched-signal test: ordinary parents vs. stall parents (EXPLORATORY; parents are the unit)", "",
+         f"Plan `{reg['plan_file']}` (sha256 LF `{reg['plan_sha256_lf'][:16]}`, committed in `{reg['plan_committed_in'][:12]}`); "
+         f"split `{reg['split_sha256'][:16]}` (the same as the stall test's). Code `{S['commit'][:12]}` (clean: {S['clean_tree']}). "
+         f"Recomputed choices match both analysis.json files (max |diff| {max(S['recheck_max_abs_dev'].values()):.1e}).", "",
+         "## Lead: where gradient rank 1 succeeds, does KL selection match or beat it?", "",
+         "| definition of success | n | parents | KL beats / matches / worse | mean KL - rank-1 regret | sign test p | "
+         "KL choice passes | rank 1 passes | KL picks rank 1 |",
+         "|---|---|---|---|---|---|---|---|---|"]
+    for label, X in lead.items():
+        for n in sizes:
+            b = X["by_n"][n]
+            L.append(f"| {label} | {n} | {len(X['parents'])} | {b['kl_beats']} / {b['kl_matches']} / {b['kl_worse']} | "
+                     f"{pt(b['mean_diff'])} | {b['p_two_sided']:.3f} | {100 * b['kl_choice_pass_share']:.0f} % | "
+                     f"{100 * b['rank1_pass_share']:.0f} % | {100 * b['kl_picks_rank1_share']:.0f} % |")
+    L += ["", f"## Recommendation (pre-registered rule at n = {rec['n']})", "",
+          f"**{rec['policy']}.** Rank-1-rejected parents R: KL better than rank 1 at {rec['R']['kl_better']} of "
+          f"{rec['R']['parents']}. Rank-1-accepted parents S: KL better / tie / worse at {rec['S']['kl_better']} / "
+          f"{rec['S']['kl_tie']} / {rec['S']['kl_worse']} of {rec['S']['parents']}, mean KL - rank 1 "
+          f"{pt(rec['S']['mean_kl_minus_rank1'])} pts. The same rule at other n: "
+          + ", ".join(f"n = {n}: {v}" for n, v in rec["by_n"].items())
+          + ". On rejected parents KL picks the (already rejected) rank 1 in "
+          + ", ".join(f"{100 * v:.0f} %" for v in rec["rejected_parents_kl_picks_rank1_share"].values())
+          + " of draws (n = " + ", ".join(map(str, sizes)) + ").", "",
+          "## Regret of the top-1 choice (points; mean over parents, each parent = mean over 20 draws)", ""]
+    for g in ("ordinary", "stall", "all"):
+        L += [f"**{g}** ({len(S['groups'][g])} parents)", "",
+              "| n per category | S0 net flip | S2 KL | S1c | gradient rank 1 | random (expected) |", "|---|---|---|---|---|---|"]
+        for n in sizes:
+            t = S["regret_tables"][g][n]
+            L.append(f"| {n} | {pt(t['S0'])} | {pt(t['S2'])} | {pt(t['S1c'])} | {pt(t['gradient rank 1'])} | "
+                     f"{pt(t['random (expected)'])} |")
+        L.append("")
+    L += ["## Sign tests across parents (KL vs. the comparator; per-parent mean regret)", "",
+          "| group | comparator | n | parents | KL better / tie / worse | mean KL - comparator | p (two-sided) |",
+          "|---|---|---|---|---|---|---|"]
+    for k, v in S["sign_tests"].items():
+        g, other, n = k.split("|")
+        L.append(f"| {g} | {other.replace('KL vs ', '')} | {n} | {v['parents']} | {v['kl_better']} / {v['tie']} / "
+                 f"{v['kl_worse']} | {pt(v['mean_diff'])} | {v['p_two_sided']:.3f} |")
+    L += ["", "## Per parent (regret in points; KL pass = share of draws whose KL choice is <= 3 points on half 2)", "",
+          f"| parent | group | rank-1 gate | rank-1 half-2 worst | best half-2 worst | rank 1 | S0 n={lo} | KL n={lo} | S1c n={lo} | "
+          f"S0 n={hi} | KL n={hi} | KL pass n={lo} | KL picks rank 1 n={lo} |",
+          "|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
+    for p, r in S["per_parent"].items():
+        L.append(f"| {p} | {r['group']} | {'accept' if r['rank1_accepted'] else 'reject'} | {pt(r['rank1_worst'])} | "
+                 f"{pt(r['best_worst'])} | {pt(r['rank1_regret'])} | {pt(r['regret']['S0'][lo])} | {pt(r['regret']['S2'][lo])} | "
+                 f"{pt(r['regret']['S1c'][lo])} | {pt(r['regret']['S0'][hi])} | {pt(r['regret']['S2'][hi])} | "
+                 f"{100 * r['kl_pass_share'][lo]:.0f} % | {100 * r['kl_picks_rank1_share'][lo]:.0f} % |")
+    gc = cost["gate_paired_questions_per_candidate"]
+    L += ["", "## Cost per step", "", "| item | paired items | est. GPU s |", "|---|---|---|"]
+    for n in sizes:
+        L.append(f"| KL probe, n = {n} per category (11 actions x 4 categories x n) | {cost['probe_paired_items_per_step'][n]:,} "
+                 f"(+ {cost['probe_dense_items_per_step_if_not_cached'][n]:,} dense if not cached) | "
+                 f"{cost['probe_gpu_s_per_step_est'][n]:.0f} |")
+    for k, v in gc.items():
+        L.append(f"| screening gate, {k}: median [IQR], n = {v['n']} | {v['median']:,.0f} [{v['q25']:,.0f}-{v['q75']:,.0f}] | |")
+    L.append(f"\nGPU estimate: {1000 * cost['gpu_s_per_item_model_evaluation']:.1f} ms per item-model evaluation (median of this "
+             "run's candidate scorings, 5,214 items each, batched). A gate question is one paired item (dense + candidate).")
     return "\n".join(L) + "\n"
