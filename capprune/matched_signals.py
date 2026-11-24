@@ -952,3 +952,85 @@ def render_compare(S: dict) -> str:
     L.append(f"\nGPU estimate: {1000 * cost['gpu_s_per_item_model_evaluation']:.1f} ms per item-model evaluation (median of this "
              "run's candidate scorings, 5,214 items each, batched). A gate question is one paired item (dense + candidate).")
     return "\n".join(L) + "\n"
+
+
+# ============================================================================ supplementary (post hoc, not in the plan)
+def after_rejection(cfg: dict) -> Path:
+    """SUPPLEMENTARY, post hoc: on the parents where the gate rejected gradient rank 1, the live alternative is not rank 1
+    but the gradient's rank 2 (the top-2 fallback). Compare KL's choice among ranks 2-11 with gradient rank 2, per
+    parent and n (regret vs. the best of all 11 actions, half-2 worst-category net flip). Written to its own files."""
+    P, reg, split = check(cfg)
+    out = out_dir(cfg)
+    root = resolve_path(cfg, _ms(cfg)["runs_root"])
+    groups = {"ordinary": out, "stall": (root / P["stall_analysis"]).parent}
+    cats, tol = sorted(split["half1"]), float(P["tolerance"])
+    rows = []
+    for g, d_ in groups.items():
+        man = read_json(d_ / "manifest.json")
+        if sha256_file(d_ / "logprobs.npz") != man["npz_sha256"]:
+            raise SystemExit(f"{d_}: logprobs.npz changed after scoring")
+        Z = np.load(d_ / "logprobs.npz")
+        pos = {q: i for i, q in enumerate(Z["qid"].tolist())}
+        N = len(pos)
+
+        def sel_of(qids):
+            m = np.zeros(N, bool)
+            m[[pos[q] for q in qids]] = True
+            return m
+
+        h2 = {k: sel_of(split["half2"][k]) for k in cats}
+        ans = Z["answer"].astype(int)
+        by_parent: dict[str, list[dict]] = {}
+        for c in man["candidates"]:
+            by_parent.setdefault(c["parent"], []).append(c)
+        for p, cs in by_parent.items():
+            r1 = next(c for c in cs if c["rank"] == 1)
+            if r1["diagnostic_decision"] == "accept":
+                continue
+            T = {c["mask_hash"]: item_terms(Z["logp__dense"], Z[f"logp__{c['mask_hash']}"], ans, Z["correct__dense"],
+                                            Z[f"correct__{c['mask_hash']}"]) for c in cs}
+            worst = {h: max(float(t["flip"][h2[k]].mean()) for k in cats) for h, t in T.items()}
+            best = min(worst.values())
+            r2 = next(c for c in cs if c["rank"] == 2)
+            rest = [c for c in cs if c["rank"] != 1]
+            row = {"group": g, "parent": p, "rank2_worst": worst[r2["mask_hash"]], "rank2_regret": worst[r2["mask_hash"]] - best,
+                   "rank2_passes": worst[r2["mask_hash"]] <= tol + 1e-12, "kl_regret": {}, "kl_pass_share": {}}
+            for n in P["sizes"]:
+                reg_, ok = [], []
+                for d in range(int(P["draws"])):
+                    sub = subsample(split["half1"], int(n), d, int(P["subsample_seed"]))
+                    sel = {k: sel_of(sub[k]) for k in cats}
+                    vals = [{k: signal_means(T[c["mask_hash"]], sel[k]) for k in cats} for c in rest]
+                    j = choose([float(np.nanmax([v[k]["S2"] for k in cats])) for v in vals], [c["rank"] for c in rest])
+                    w = worst[rest[j]["mask_hash"]]
+                    reg_.append(w - best)
+                    ok.append(w <= tol + 1e-12)
+                row["kl_regret"][int(n)] = float(np.mean(reg_))
+                row["kl_pass_share"][int(n)] = float(np.mean(ok))
+            rows.append(row)
+    summ = {}
+    for n in map(int, P["sizes"]):
+        d = [r["kl_regret"][n] - r["rank2_regret"] for r in rows]
+        b, w = sum(x < -1e-12 for x in d), sum(x > 1e-12 for x in d)
+        summ[n] = {"parents": len(rows), "kl_better": b, "tie": len(rows) - b - w, "kl_worse": w, "mean_diff": float(np.mean(d)),
+                   "mean_kl": float(np.mean([r["kl_regret"][n] for r in rows])),
+                   "mean_rank2": float(np.mean([r["rank2_regret"] for r in rows])), "p_two_sided": sign_test(b, w)}
+    S = {"label": "SUPPLEMENTARY, post hoc (not in the registered plan): KL among ranks 2-11 vs. gradient rank 2 where "
+                  "rank 1 was rejected", "rows": rows, "summary": summ, "commit": _git("rev-parse", "HEAD"),
+         "clean_tree": _git("status", "--porcelain") == ""}
+    atomic_write_json(out / "after_rejection.json", S)
+    pt = lambda v: f"{100 * v:+.2f}"  # noqa: E731
+    L = ["# After a rank-1 rejection: KL among ranks 2-11 vs. gradient rank 2 (SUPPLEMENTARY, post hoc)", "",
+         f"Code `{S['commit'][:12]}` (clean: {S['clean_tree']}). Regret = half-2 worst-category net flip loss above the best "
+         "of all 11 actions (points); KL = mean over 20 draws.", "",
+         "| parent | group | rank 2 half-2 worst | rank 2 regret | " + " | ".join(f"KL n={n}" for n in P["sizes"]) + " |",
+         "|---|---|---|---|" + "---|" * len(P["sizes"])]
+    for r in rows:
+        L.append(f"| {r['parent']} | {r['group']} | {pt(r['rank2_worst'])} | {pt(r['rank2_regret'])} | "
+                 + " | ".join(pt(r["kl_regret"][int(n)]) for n in P["sizes"]) + " |")
+    L += ["", "| n | parents | KL better / tie / worse | mean KL | mean rank 2 | p (two-sided) |", "|---|---|---|---|---|---|"]
+    for n, v in summ.items():
+        L.append(f"| {n} | {v['parents']} | {v['kl_better']} / {v['tie']} / {v['kl_worse']} | {pt(v['mean_kl'])} | "
+                 f"{pt(v['mean_rank2'])} | {v['p_two_sided']:.3f} |")
+    atomic_write_text(out / "after_rejection.md", "\n".join(L) + "\n")
+    return out / "after_rejection.md"
