@@ -1,0 +1,12 @@
+# Screen-then-confirm protocol (docs/screen_confirm_protocol.md): confirmation sample sizes per category.
+#   python -m capprune screen-confirm sizes --config configs/screen_confirm.yaml
+extends: gradient_live_ext.yaml
+
+screen_confirm:
+  regate: ~/cap-prune-runs/population-regate/regate.json   # observed paired disagreement rates (read only)
+  run: A                     # the screening design = run A (exact-pool gate, 3 points, gradient top-1)
+  final_attempt: 15          # A's frozen final checkpoint (e65e9461315ef207)
+  alpha: 0.05
+  tolerance: 0.03
+  true_losses: [0.0, 0.01, 0.015]
+  out_dir: ~/cap-prune-runs/screen-confirm

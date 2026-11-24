@@ -1,0 +1,12 @@
+# Matched-compression signal test (EXPLORATORY; plan: docs/matched_signal_plan.md).  The three stall parents' 11
+# equal-size actions each, scored on both halves of the gate pool; signals on half-1 subsamples vs. half-2 net flip loss.
+#   python -m capprune matched-signals register --config configs/matched_signals.yaml   # split + plan hashes, before scoring
+#   python -m capprune matched-signals score    --config configs/matched_signals.yaml   # GPU: dense + 33 candidates
+#   python -m capprune matched-signals analyze  --config configs/matched_signals.yaml   # CPU: regret, Spearman, pass/fail
+extends: gradient_live_ext.yaml
+
+matched_signals:
+  plan_file: ../docs/matched_signal_plan.md
+  out_dir: ~/cap-prune-runs/matched-signals
+  runs_root: ~/cap-prune-runs
+  protocol_commit: 15171d35a916571207333fb46a37efba4208c79b   # docs/screen_confirm_protocol.md, committed before this test

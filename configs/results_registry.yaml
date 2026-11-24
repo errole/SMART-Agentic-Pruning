@@ -125,6 +125,22 @@ experiments:
     docs: docs/population_gate.md
     extractor: pool_signals
     label: exploratory, descriptive (n = 7)
+  - id: screen-confirm
+    title: "Screen-then-confirm protocol v1: confirmation sample sizes per category (no confirmation run yet)"
+    folder: screen-confirm
+    configs: [configs/screen_confirm.yaml, docs/screen_confirm_protocol.md]
+    reports: [screen-confirm/confirmation_sizes.md]
+    docs: docs/screen_confirm_protocol.md
+    extractor: screen_confirm
+    label: protocol (committed before any new scoring); sample-size planning only
+  - id: matched-signals
+    title: "Matched-compression signal test: KL vs. net flip as choice signals among equal-size actions (3 stall parents x 11)"
+    folder: matched-signals
+    configs: [configs/matched_signals.yaml, docs/matched_signal_plan.md]
+    reports: [matched-signals/report.md]
+    docs: docs/matched_signals.md
+    extractor: matched_signals
+    label: exploratory (pre-registered plan and split; gate-pool items only, no audit sets)
   - id: unstructured
     title: "Unstructured-mode CAP-Prune matrix (started, never progressed past setup)"
     folder: unstructured
