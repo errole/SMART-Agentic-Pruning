@@ -68,6 +68,17 @@ unchanged.
 * **S1c and total variation (TV) are recorded as secondary signals, not adopted.** S1c had the lowest regret of the
   measured signals, but it was not a policy option in the plan.
 
+**Edits to amendment 2 (2026-11-23, approved; commit `3f16846` stays the record of the original wording):**
+1. **Budget.** Probe items count against the arm's **question cap**, not only the proposal cap. They are reported
+   separately in the cost accounting:
+   * per probe: `kl_probe.cost` in the journal;
+   * per run: `kl_probe` and `budget.kl_probe_paired_items` in the search state.
+2. **Selection rule.** The KL selection uses exactly the aggregation of the matched-signal evidence: the shared
+   function **`capprune.signals.pick_action`**, applied to `signals.signal_means` of `signals.item_terms`.
+3. **Probe set for confirmatory models.** For each confirmatory model, the probe set is 100 items per category from
+   that model's own screening pool, disjoint from its gate items and from its sealed confirmation set. Both are
+   defined in the confirmatory plan.
+
 ## 1. Screening (choose the steps), as amended
 
 * **Gate:** the existing exact finite-pool capability gate. It is threshold-aware, uses the ranker's 5,214-item label
@@ -76,21 +87,28 @@ unchanged.
 * **Proposer:** gradient top-1 at every parent, with the ranker's candidate generator, the matched 1,280-channel step
   and the 11-action shortlist (amendment 2).
 * **After a rank-1 rejection (or inconclusive decision): the KL probe.**
-  * **Probe items:** the ranker's probe split.
-    * 100 items per category (400), drawn by seed 4242 from the pruning-time pool.
-    * Disjoint from the gate's 5,214 items, and the same items at every probe.
-    * They are not confirmation items.
+  * **Probe items:** 100 items per category from the model's screening pool, disjoint from its gate items and from
+    its sealed confirmation set, and the same items at every probe.
+    * For Qwen3-1.7B this is the ranker's probe split: 400 items drawn by seed 4242 from the pruning-time pool,
+      disjoint from the gate's 5,214 items.
+    * For confirmatory models, the probe and confirmation sets are defined in the confirmatory plan.
+    * The live loop refuses to run if any probe, gate or counterfactual item is in a listed sealed confirmation set
+      (`ranked_search.sealed_confirmation`).
   * **Scoring:** the dense model and the parent's ranks 2–11 on the probe items, with the gate's 0-shot prompt, in
     identical batches. Dense answers are scored once and cached.
   * **Signal and choice:** per category, the mean KL(dense ‖ candidate), with both distributions renormalised over
-    A–D. Choose the action with the lowest worst-category value; ties go to the lower gradient rank.
+    A–D. Choose the action with the lowest worst-category value; ties go to the lower gradient rank. This is exactly
+    the matched-signal aggregation: `capprune.signals.pick_action` on `signals.signal_means` of `signals.item_terms`.
   * **Gate:** KL's choice goes through the same gate, with its own attempt number and question order.
     * Accept: it becomes the new parent, and gradient top-1 resumes.
     * Reject or inconclusive: stop.
   * **Budget:** every probe is charged to the arm.
-    * 10 actions × 400 = **4,000 paired items** count toward the paired-question cap, plus 400 dense items the first
-      time.
-    * KL's choice counts as a proposal toward the 30-proposal cap.
+    * 10 actions × 400 = **4,000 paired items** count against the arm's question cap. That is checked before the probe
+      starts: a probe that would exceed the cap is not run, and the run ends with a budget stop.
+    * The 400 dense items are scored the first time and then cached; like the gate's dense references, they are not
+      charged.
+    * KL's choice also counts as a proposal toward the 30-proposal cap.
+    * Probe costs are reported separately from gate costs.
   * **Recorded, not used for any decision:** per probe and candidate, on the probe items:
     * the net flip loss (S0);
     * S1c, the Δ log p(correct) over A–D on dense-correct items;
