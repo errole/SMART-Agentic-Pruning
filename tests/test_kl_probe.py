@@ -219,3 +219,16 @@ def test_screening_split_refuses_overlap_with_the_sealed_set(tmp):
     plain = screening_split(rc, data)
     assert {r["qid"] for r in plain["gate"]} == {r["qid"] for r in ok["gate"]} | {r["qid"] for r in ok["holdout"]}
     assert np.isclose(len(plain["gate"]) - len(ok["gate"]), len(ok["holdout"]))
+
+
+def test_sealed_ids_parse_jsonl_with_unicode_line_separators(tmp_path):
+    """Regression (found by the Qwen GPU smoke test): MMLU text can contain U+2028, which str.splitlines() treats as a
+    line break; the sealed-set reader must split JSONL on newlines only."""
+    from capprune.gradient_live import sealed_qids
+
+    rows = [{"qid": "a", "question": "x\u2028y"}, {"qid": "b", "question": "plain"}, {"qid": "c", "question": "z\x85w"}]
+    p = tmp_path / "sealed.jsonl"
+    p.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows), encoding="utf-8")
+    j = tmp_path / "sealed.json"
+    j.write_text(json.dumps({"qids": ["d"]}), encoding="utf-8")
+    assert sealed_qids({"_config_dir": str(tmp_path), "ranked_search": {"sealed_confirmation": [str(p), str(j)]}}) == {"a", "b", "c", "d"}
