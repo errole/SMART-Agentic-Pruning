@@ -1,0 +1,30 @@
+# Confirmatory model 2: Granite-3.3-2B-Base (IBM Granite family; Apache-2.0; not gated). See confirmatory.yaml.
+extends: confirmatory.yaml
+
+model:
+  name_or_path: ibm-granite/granite-3.3-2b-base
+  revision: c15dc681f4b2aeb4e576cdaae5434edfc17ed14d
+
+experiment:
+  runs_dir: ~/cap-prune-runs/confirmatory/granite-3.3-2b/runs
+  data_dir: ~/cap-prune-runs/data-granite-3.3-2b
+
+ranker:   # 40 layers x 8,192 MLP channels (128 blocks of 64): 4 units x 10 blocks = 2,560 channels = 0.781 % of MLP channels
+  step_blocks: 40
+  shortlist: {units_per_action: 4, blocks_per_unit: 10, window_starts: [0, 4, 8, 12, 16, 20, 24, 28, 32, 36]}
+
+ranked_search:
+  sealed_confirmation: [~/cap-prune-runs/confirmatory/granite-3.3-2b/sealed/confirmation_qids.json]
+  split_registration: ~/cap-prune-runs/confirmatory/granite-3.3-2b/registration.json
+
+gradient_live:
+  method: cap_top1
+  out_dir: ~/cap-prune-runs/confirmatory/granite-3.3-2b/_analysis
+
+confirmatory:
+  model_key: granite-3.3-2b
+  out_dir: ~/cap-prune-runs/confirmatory/granite-3.3-2b
+  split_seed: 2026112402
+  model_files:
+    model-00001-of-00002.safetensors: e9f76a73e7c5acd6800f70180871ba2fc6086fae577499c1b12eabca92707844
+    model-00002-of-00002.safetensors: 5545dacca7749c17635cf103ccfd379a6f145988dbe8f5aae7f9559f45ad68c2

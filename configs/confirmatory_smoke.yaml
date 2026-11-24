@@ -1,0 +1,52 @@
+# CPU smoke test of the confirmatory pipeline (tiny random Qwen3, live-smoke data): seal -> screen (three arms) ->
+# freeze -> confirm -> report. Paths are set by tests/test_confirmatory.py. Numbers are meaningless.
+extends: gradient_live_smoke.yaml
+
+search:
+  ppl_rollback_threshold: 0.15
+
+ranked_search:
+  max_proposals: 4
+  question_cap: null
+  fallback_k: 1
+  screening_holdout: {per_domain: 10, seed: 9091}
+  kl_probe: {per_domain: 10, ranks: [2, 11], batch_size: 10, order_seed: 2026}
+  counterfactual: {enabled: false, batch_size: 10, charge_to_cap: false, seed: 9091}
+
+gate:
+  capability:
+    budget: 100000
+
+methods:
+  ppl_top1:
+    kind: ranked_search
+    overrides: {gate: {kind: capability, capability: {policy: threshold_aware}}, ranked_search: {screen: perplexity, ppl_tau: 0.15}}
+  cap_top1:
+    kind: ranked_search
+    overrides: {gate: {kind: capability, capability: {policy: threshold_aware}}}
+  cap_klprobe:
+    kind: ranked_search
+    overrides: {gate: {kind: capability, capability: {policy: threshold_aware}},
+                ranked_search: {fallback_policy: kl_probe, counterfactual: {enabled: true}}}
+
+matrix:
+  methods: [ppl_top1, cap_top1, cap_klprobe]
+  targets: [0.0]
+  seeds: [0]
+
+confirmatory:
+  model_key: smoke
+  plan_file: ../docs/confirmatory_study_plan.md
+  require_committed_plan: false
+  split_seed: 7
+  alpha: 0.05
+  tolerance: 0.15
+  confirmation_per_category: {STEM: 20, Humanities: 20, Social Sciences: 20, Other: 20}
+  probe_per_category: 10
+  holdout_per_category: 10
+  min_gate_per_category: 40
+  confirm_order_seed: 2027
+  admissibility: {overall_min: 0.0, per_category_min: 0.0}
+  planning_rates: null
+  batches:
+    pilot: [[ppl_top1, 0], [cap_top1, 0], [cap_klprobe, 0]]
