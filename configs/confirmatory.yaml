@@ -17,6 +17,10 @@ data:
 search:
   ppl_rollback_threshold: 0.15     # arm (a): tau = 15 % relative perplexity increase over the parent (base paper)
 
+profiling:
+  gradient_checkpointing: true     # the 2,048-token backward pass of a 3B model does not fit next to the dense copy on a
+                                   # 32 GB GPU without it; same computation (bitwise identical profile, measured)
+
 ranked_search:
   selector: gradient
   max_proposals: 30                # cap: gated proposals per run (KL picks included)

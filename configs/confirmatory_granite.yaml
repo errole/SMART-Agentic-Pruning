@@ -28,3 +28,6 @@ confirmatory:
   model_files:
     model-00001-of-00002.safetensors: e9f76a73e7c5acd6800f70180871ba2fc6086fae577499c1b12eabca92707844
     model-00002-of-00002.safetensors: 5545dacca7749c17635cf103ccfd379a6f145988dbe8f5aae7f9559f45ad68c2
+  batches:   # model 2 has no pilot: all nine runs form one batch
+    main: [[ppl_top1, 0], [cap_top1, 0], [cap_klprobe, 0], [ppl_top1, 1], [cap_top1, 1], [cap_klprobe, 1],
+           [ppl_top1, 2], [cap_top1, 2], [cap_klprobe, 2]]

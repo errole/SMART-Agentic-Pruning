@@ -415,7 +415,7 @@ def profile_parent(model, state, calib, rc: dict, batch_store: dict, hb=None):
     g_idx = np.sort(prng.choice(calib.shape[0], size=min(int(pp["gradient_samples"]), calib.shape[0]), replace=False))
     act = collect_act_sqnorm(model, state, calib[a_idx], batch_store, hb, int(pp.get("activation_batch_size", 4)))
     sens = sensitivity(state, act, float(rc["pruning"].get("sensitivity_percentile", 10)))
-    grad = collect_grad_importance(model, state, calib[g_idx], hb)
+    grad = collect_grad_importance(model, state, calib[g_idx], hb, checkpointing=bool(pp.get("gradient_checkpointing", False)))
     return act, sens, grad
 
 
