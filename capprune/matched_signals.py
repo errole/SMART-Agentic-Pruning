@@ -22,6 +22,7 @@ from pathlib import Path
 import numpy as np
 
 from .config import resolve_path
+from .signals import choose, item_terms, pick_action, signal_means  # noqa: F401  (shared with the live loop)
 from .utils.io import atomic_write_json, atomic_write_text, read_json, sha256_file
 from .utils.log import get_logger
 
@@ -72,32 +73,6 @@ def subsample(half1: dict[str, list[str]], n: int, draw: int, seed: int) -> dict
     return out
 
 
-def _renorm(lp: np.ndarray) -> np.ndarray:
-    z = lp.astype(np.float64) - lp.max(1, keepdims=True)
-    return z - np.log(np.exp(z).sum(1, keepdims=True))
-
-
-def item_terms(lp_dense: np.ndarray, lp_cand: np.ndarray, answer: np.ndarray, c_dense: np.ndarray, c_cand: np.ndarray) -> dict:
-    """Per-item terms whose means are the signals: flip x in {-1,0,1}, KL over A-D, and the renormalised correct-answer
-    log-prob change (kept with a dense-correct mask for S1c)."""
-    a, b = _renorm(lp_dense), _renorm(lp_cand)
-    idx = np.arange(len(answer))
-    return {"flip": c_dense.astype(int) - c_cand.astype(int), "kl": (np.exp(a) * (a - b)).sum(1),
-            "dlogp": a[idx, answer] - b[idx, answer], "dense_correct": c_dense.astype(bool)}
-
-
-def signal_means(t: dict, sel: np.ndarray) -> dict:
-    """S0, S2 and S1c over the selected items (S1c only over the dense-correct ones)."""
-    dc = sel & t["dense_correct"]
-    return {"S0": float(t["flip"][sel].mean()), "S2": float(t["kl"][sel].mean()),
-            "S1c": float(t["dlogp"][dc].mean()) if dc.any() else float("nan")}
-
-
-def choose(scores: list[float], ranks: list[int]) -> int:
-    """Index of the action with the lowest score; ties -> lower gradient rank."""
-    return min(range(len(scores)), key=lambda i: (round(scores[i], 12), ranks[i]))
-
-
 def spearman(x, y) -> float:
     """Spearman correlation with average ranks for ties; NaN if either side does not vary (or n < 3)."""
     x, y = np.asarray(x, float), np.asarray(y, float)
@@ -126,8 +101,7 @@ def decide(ranks: list[int], vals: list[dict], target: list[dict], tol: float, c
     truth = [w <= tol + 1e-12 for w in worst]
     out = {"regret": {}, "spearman": {}, "call_acc": {}}
     for s in SIGNALS:
-        agg = [float(np.nanmax([v[k][s] for k in cats])) for v in vals]
-        out["regret"][s] = worst[choose(agg, ranks)] - best
+        out["regret"][s] = worst[pick_action(vals, ranks, s)] - best
         sp = [spearman([v[k][s] for v in vals], [t[k] for t in target]) for k in cats]
         out["spearman"][s] = float(np.nanmean(sp)) if not np.all(np.isnan(sp)) else float("nan")
         a, b = (0.0, 1.0) if s == "S0" else calib[s]
@@ -789,7 +763,7 @@ def _group_choices(out: Path, split: dict, P: dict) -> dict:
                 vals = [{k: signal_means(terms[c["mask_hash"]], sel[k]) for k in cats} for c in cs]
                 ranks = [c["rank"] for c in cs]
                 for s in SIGNALS:
-                    j = choose([float(np.nanmax([v[k][s] for k in cats])) for v in vals], ranks)
+                    j = pick_action(vals, ranks, s)
                     w = worst[cs[j]["mask_hash"]]
                     info[p]["choices"].setdefault(s, {}).setdefault(int(n), []).append({"rank": cs[j]["rank"], "worst": w})
                     max_dev = max(max_dev, abs((w - info[p]["best_worst"]) - stored[(p, int(n), d)][s]))
@@ -1001,7 +975,7 @@ def after_rejection(cfg: dict) -> Path:
                     sub = subsample(split["half1"], int(n), d, int(P["subsample_seed"]))
                     sel = {k: sel_of(sub[k]) for k in cats}
                     vals = [{k: signal_means(T[c["mask_hash"]], sel[k]) for k in cats} for c in rest]
-                    j = choose([float(np.nanmax([v[k]["S2"] for k in cats])) for v in vals], [c["rank"] for c in rest])
+                    j = pick_action(vals, [c["rank"] for c in rest], "S2")
                     w = worst[rest[j]["mask_hash"]]
                     reg_.append(w - best)
                     ok.append(w <= tol + 1e-12)
