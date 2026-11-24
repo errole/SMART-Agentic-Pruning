@@ -306,3 +306,14 @@ def test_compare_end_to_end_on_synthetic_groups(tmp_path, monkeypatch):
     assert S["per_parent"]["S1"]["rank1_regret"] > 0.05 and S["per_parent"]["S1"]["regret"]["S2"]["100"] < 0.02
     assert S["recommendation"]["policy"] == "KL only after a rank-1 rejection"
     assert S["cost"]["probe_paired_items_per_step"]["100"] == 4400
+
+
+def test_total_variation_formula():
+    from capprune.signals import item_terms, signal_means
+
+    p = np.array([[0.7, 0.1, 0.1, 0.1], [0.25, 0.25, 0.25, 0.25]])
+    q = np.array([[0.4, 0.4, 0.1, 0.1], [0.25, 0.25, 0.25, 0.25]])
+    t = item_terms(np.log(p * 0.5), np.log(q * 0.9), np.array([0, 1]), np.array([1, 0]), np.array([1, 0]))  # renormalised
+    assert t["tv"] == pytest.approx([0.3, 0.0])
+    assert signal_means(t, np.array([True, True]))["TV"] == pytest.approx(0.15)
+    assert (t["tv"] <= np.sqrt(t["kl"] / 2) + 1e-12).all()   # Pinsker's inequality
