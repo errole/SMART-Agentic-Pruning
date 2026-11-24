@@ -22,6 +22,7 @@ from pathlib import Path
 import numpy as np
 
 from .config import resolve_path
+from .signals import choose, item_terms, pick_action, signal_means  # noqa: F401  (shared with the live loop)
 from .utils.io import atomic_write_json, atomic_write_text, read_json, sha256_file
 from .utils.log import get_logger
 
@@ -72,32 +73,6 @@ def subsample(half1: dict[str, list[str]], n: int, draw: int, seed: int) -> dict
     return out
 
 
-def _renorm(lp: np.ndarray) -> np.ndarray:
-    z = lp.astype(np.float64) - lp.max(1, keepdims=True)
-    return z - np.log(np.exp(z).sum(1, keepdims=True))
-
-
-def item_terms(lp_dense: np.ndarray, lp_cand: np.ndarray, answer: np.ndarray, c_dense: np.ndarray, c_cand: np.ndarray) -> dict:
-    """Per-item terms whose means are the signals: flip x in {-1,0,1}, KL over A-D, and the renormalised correct-answer
-    log-prob change (kept with a dense-correct mask for S1c)."""
-    a, b = _renorm(lp_dense), _renorm(lp_cand)
-    idx = np.arange(len(answer))
-    return {"flip": c_dense.astype(int) - c_cand.astype(int), "kl": (np.exp(a) * (a - b)).sum(1),
-            "dlogp": a[idx, answer] - b[idx, answer], "dense_correct": c_dense.astype(bool)}
-
-
-def signal_means(t: dict, sel: np.ndarray) -> dict:
-    """S0, S2 and S1c over the selected items (S1c only over the dense-correct ones)."""
-    dc = sel & t["dense_correct"]
-    return {"S0": float(t["flip"][sel].mean()), "S2": float(t["kl"][sel].mean()),
-            "S1c": float(t["dlogp"][dc].mean()) if dc.any() else float("nan")}
-
-
-def choose(scores: list[float], ranks: list[int]) -> int:
-    """Index of the action with the lowest score; ties -> lower gradient rank."""
-    return min(range(len(scores)), key=lambda i: (round(scores[i], 12), ranks[i]))
-
-
 def spearman(x, y) -> float:
     """Spearman correlation with average ranks for ties; NaN if either side does not vary (or n < 3)."""
     x, y = np.asarray(x, float), np.asarray(y, float)
@@ -126,8 +101,7 @@ def decide(ranks: list[int], vals: list[dict], target: list[dict], tol: float, c
     truth = [w <= tol + 1e-12 for w in worst]
     out = {"regret": {}, "spearman": {}, "call_acc": {}}
     for s in SIGNALS:
-        agg = [float(np.nanmax([v[k][s] for k in cats])) for v in vals]
-        out["regret"][s] = worst[choose(agg, ranks)] - best
+        out["regret"][s] = worst[pick_action(vals, ranks, s)] - best
         sp = [spearman([v[k][s] for v in vals], [t[k] for t in target]) for k in cats]
         out["spearman"][s] = float(np.nanmean(sp)) if not np.all(np.isnan(sp)) else float("nan")
         a, b = (0.0, 1.0) if s == "S0" else calib[s]
@@ -789,7 +763,7 @@ def _group_choices(out: Path, split: dict, P: dict) -> dict:
                 vals = [{k: signal_means(terms[c["mask_hash"]], sel[k]) for k in cats} for c in cs]
                 ranks = [c["rank"] for c in cs]
                 for s in SIGNALS:
-                    j = choose([float(np.nanmax([v[k][s] for k in cats])) for v in vals], ranks)
+                    j = pick_action(vals, ranks, s)
                     w = worst[cs[j]["mask_hash"]]
                     info[p]["choices"].setdefault(s, {}).setdefault(int(n), []).append({"rank": cs[j]["rank"], "worst": w})
                     max_dev = max(max_dev, abs((w - info[p]["best_worst"]) - stored[(p, int(n), d)][s]))
@@ -1001,7 +975,7 @@ def after_rejection(cfg: dict) -> Path:
                     sub = subsample(split["half1"], int(n), d, int(P["subsample_seed"]))
                     sel = {k: sel_of(sub[k]) for k in cats}
                     vals = [{k: signal_means(T[c["mask_hash"]], sel[k]) for k in cats} for c in rest]
-                    j = choose([float(np.nanmax([v[k]["S2"] for k in cats])) for v in vals], [c["rank"] for c in rest])
+                    j = pick_action(vals, [c["rank"] for c in rest], "S2")
                     w = worst[rest[j]["mask_hash"]]
                     reg_.append(w - best)
                     ok.append(w <= tol + 1e-12)
@@ -1034,3 +1008,111 @@ def after_rejection(cfg: dict) -> Path:
                  f"{pt(v['mean_rank2'])} | {v['p_two_sided']:.3f} |")
     atomic_write_text(out / "after_rejection.md", "\n".join(L) + "\n")
     return out / "after_rejection.md"
+
+
+# ============================================================================ post hoc: total variation (TV)
+def tv_posthoc(cfg: dict) -> Path:
+    """POST HOC (not in either registered plan): total variation over A-D as a fourth choice signal, computed from the
+    saved log-probabilities of both matched-signal studies with the same subsamples, target and selection rule
+    (``signals.pick_action``). The three registered signals are recomputed alongside and must reproduce the stored
+    regrets exactly. Written to its own files."""
+    P, reg, split = check(cfg)
+    out = out_dir(cfg)
+    root = resolve_path(cfg, _ms(cfg)["runs_root"])
+    groups = {"ordinary": out, "stall": (root / P["stall_analysis"]).parent}
+    sigs = ("S0", "S2", "S1c", "TV")
+    cats, sizes, tol = sorted(split["half1"]), [int(n) for n in P["sizes"]], float(P["tolerance"])
+    per: dict[str, dict] = {}
+    max_dev = 0.0
+    for g, d_ in groups.items():
+        man, A = read_json(d_ / "manifest.json"), read_json(d_ / "analysis.json")
+        if sha256_file(d_ / "logprobs.npz") != man["npz_sha256"]:
+            raise SystemExit(f"{d_}: logprobs.npz changed after scoring")
+        Z = np.load(d_ / "logprobs.npz")
+        pos = {q: i for i, q in enumerate(Z["qid"].tolist())}
+        N = len(pos)
+
+        def sel_of(qids):
+            m = np.zeros(N, bool)
+            m[[pos[q] for q in qids]] = True
+            return m
+
+        h2 = {k: sel_of(split["half2"][k]) for k in cats}
+        ans = Z["answer"].astype(int)
+        by_parent: dict[str, list[dict]] = {}
+        for c in man["candidates"]:
+            by_parent.setdefault(c["parent"], []).append(c)
+        terms = {c["mask_hash"]: item_terms(Z["logp__dense"], Z[f"logp__{c['mask_hash']}"], ans, Z["correct__dense"],
+                                            Z[f"correct__{c['mask_hash']}"]) for c in man["candidates"]}
+        target = {h: {k: float(t["flip"][h2[k]].mean()) for k in cats} for h, t in terms.items()}
+        stored = {(r["parent"], r["n"], r["draw"]): r["regret"] for r in A["rows"]}
+        for p, cs in by_parent.items():
+            worst = [max(target[c["mask_hash"]].values()) for c in cs]
+            best = min(worst)
+            ranks = [c["rank"] for c in cs]
+            r1 = next(i for i, c in enumerate(cs) if c["rank"] == 1)
+            row = {"group": g, "rank1_accepted": cs[r1]["diagnostic_decision"] == "accept", "rank1_regret": worst[r1] - best,
+                   "regret": {s: {} for s in sigs}, "spearman": {s: {} for s in sigs}, "pass_share": {s: {} for s in sigs}}
+            for n in sizes:
+                acc = {s: {"reg": [], "sp": [], "ok": []} for s in sigs}
+                for d in range(int(P["draws"])):
+                    sub = subsample(split["half1"], n, d, int(P["subsample_seed"]))
+                    sel = {k: sel_of(sub[k]) for k in cats}
+                    vals = [{k: signal_means(terms[c["mask_hash"]], sel[k]) for k in cats} for c in cs]
+                    for s in sigs:
+                        j = pick_action(vals, ranks, s)
+                        acc[s]["reg"].append(worst[j] - best)
+                        acc[s]["ok"].append(worst[j] <= tol + 1e-12)
+                        sp = [spearman([v[k][s] for v in vals], [target[c["mask_hash"]][k] for c in cs]) for k in cats]
+                        acc[s]["sp"].append(float(np.nanmean(sp)) if not np.all(np.isnan(sp)) else float("nan"))
+                        if s in SIGNALS:
+                            max_dev = max(max_dev, abs(acc[s]["reg"][-1] - stored[(p, n, d)][s]))
+                for s in sigs:
+                    row["regret"][s][n] = float(np.mean(acc[s]["reg"]))
+                    row["spearman"][s][n] = float(np.nanmean(acc[s]["sp"]))
+                    row["pass_share"][s][n] = float(np.mean(acc[s]["ok"]))
+            per[p] = row
+    if max_dev > 1e-9:
+        raise RuntimeError(f"the registered signals do not reproduce the stored regrets (max |diff| {max_dev})")
+    grp = {"ordinary": [p for p in per if per[p]["group"] == "ordinary"], "stall": [p for p in per if per[p]["group"] == "stall"]}
+    grp["all"] = grp["ordinary"] + grp["stall"]
+    tables = {g: {n: {**{s: float(np.mean([per[p]["regret"][s][n] for p in ps])) for s in sigs},
+                      "gradient rank 1": float(np.mean([per[p]["rank1_regret"] for p in ps])),
+                      **{f"spearman {s}": float(np.nanmean([per[p]["spearman"][s][n] for p in ps])) for s in sigs}}
+                  for n in sizes} for g, ps in grp.items()}
+    signs = {}
+    for g, ps in grp.items():
+        for other in ("S2", "S0", "gradient rank 1"):
+            for n in sizes:
+                d = [per[p]["regret"]["TV"][n] - (per[p]["rank1_regret"] if other == "gradient rank 1" else per[p]["regret"][other][n])
+                     for p in ps]
+                b, w = sum(x < -1e-12 for x in d), sum(x > 1e-12 for x in d)
+                signs[f"{g}|TV vs {other}|{n}"] = {"parents": len(ps), "tv_better": b, "tie": len(ps) - b - w, "tv_worse": w,
+                                                   "mean_diff": float(np.mean(d)), "p_two_sided": sign_test(b, w)}
+    S = {"label": "POST HOC (not in the registered plans): TV over A-D as a choice signal on the saved log-probabilities; "
+                  "parents are the unit; half-2 net flip loss on the gate pool; no audit sets",
+         "selection_rule": "capprune.signals.pick_action", "registered_signals_reproduced_max_abs_diff": max_dev,
+         "per_parent": per, "groups": grp, "tables": tables, "sign_tests": signs,
+         "commit": _git("rev-parse", "HEAD"), "clean_tree": _git("status", "--porcelain") == ""}
+    atomic_write_json(out / "tv_posthoc.json", S)
+    pt = lambda v: f"{100 * v:+.2f}"  # noqa: E731
+    L = ["# Total variation as a choice signal (POST HOC; not in the registered plans)", "",
+         f"Code `{S['commit'][:12]}` (clean: {S['clean_tree']}). Same subsamples, target (half-2 worst-category net flip) and "
+         f"rule (`capprune.signals.pick_action`) as the registered analyses; the registered signals reproduce the stored "
+         f"regrets (max |diff| {max_dev:.1e}). Regret in points, mean over parents (each parent = mean over 20 draws).", ""]
+    for g in ("ordinary", "stall", "all"):
+        L += [f"**{g}** ({len(grp[g])} parents)", "",
+              "| n | S0 net flip | S2 KL | S1c | TV | gradient rank 1 | Spearman S0 / KL / S1c / TV |", "|---|---|---|---|---|---|---|"]
+        for n in sizes:
+            t = tables[g][n]
+            L.append(f"| {n} | {pt(t['S0'])} | {pt(t['S2'])} | {pt(t['S1c'])} | {pt(t['TV'])} | {pt(t['gradient rank 1'])} | "
+                     + " / ".join(f"{t['spearman ' + s]:+.2f}" for s in sigs) + " |")
+        L.append("")
+    L += ["## Sign tests across parents (TV vs. the comparator)", "",
+          "| group | comparator | n | parents | TV better / tie / worse | mean TV - comparator | p (two-sided) |", "|---|---|---|---|---|---|---|"]
+    for k, v in signs.items():
+        g, other, n = k.split("|")
+        L.append(f"| {g} | {other.replace('TV vs ', '')} | {n} | {v['parents']} | {v['tv_better']} / {v['tie']} / {v['tv_worse']} | "
+                 f"{pt(v['mean_diff'])} | {v['p_two_sided']:.3f} |")
+    atomic_write_text(out / "tv_posthoc.md", "\n".join(L) + "\n")
+    return out / "tv_posthoc.md"

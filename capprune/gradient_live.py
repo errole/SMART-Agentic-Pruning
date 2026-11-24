@@ -21,8 +21,21 @@ One run = one selector x one seed, started from the dense checkpoint.  Per attem
    exceed it stops the gate before anything is scored, P is restored and the run ends with a BUDGET stop (not a
    candidate failure).  The proposal cap ends the run after ``max_proposals`` attempts.
 
-Crash safety: profiles and every paired batch are persisted before use under deterministic keys, and the search
-state is checkpointed after every attempt, so an interrupted run replays to the identical trajectory.
+7. Fallback after a rank-1 REJECT/INCONCLUSIVE (``ranked_search.fallback_policy``):
+   * ``topk`` (default, ``fallback_k``): the parent's next-ranked actions in gradient order;
+   * ``kl_probe`` (screen-then-confirm protocol, amendment 2): the next attempt reloads the parent's profile and
+     shortlist, scores ranks 2-11 and the dense copy on the probe items (``ranked_search.kl_probe``: the screening
+     pool's probe split, disjoint from the gate's items and any sealed confirmation set), picks the action with
+     ``signals.pick_action`` on KL (the matched-signal rule) and gates it. ACCEPT -> top-1 resumes at the new parent;
+     REJECT/INCONCLUSIVE -> the run ends (``fallback_exhausted``). The probe's paired items count against the question
+     cap (checked before it starts) and are reported separately.
+   * ``ranked_search.counterfactual`` (with ``kl_probe``): at each probe, the KL, S1c and TV picks and gradient rank 2
+     are scored on a hold-out slice carved out of the gate's items (never gated, never probed); recorded per rejection
+     with costs, never used for a decision, not charged to the cap unless ``charge_to_cap``.
+
+Crash safety: profiles, every paired gate batch and every probe / counterfactual batch are persisted before use under
+deterministic keys, and the search state is checkpointed after every attempt, so an interrupted run replays to the
+identical trajectory (an interrupted probe replays to the same choice).
 """
 from __future__ import annotations
 
@@ -44,7 +57,7 @@ log = get_logger("ranked")
 BUDGET_STOP = "budget_stop"
 STOP_KINDS = {"candidate_rejected": "candidate failure", "candidate_inconclusive": "candidate failure",
               "question_cap": "budget stop", "proposal_cap": "budget stop", "no_legal_candidate": "no legal action",
-              "prefix_mismatch": "replay check failed", "fallback_exhausted": "candidate failure (top-k exhausted)"}
+              "prefix_mismatch": "replay check failed", "fallback_exhausted": "candidate failure (fallback exhausted: top-k, or the KL pick)"}
 
 
 class BudgetStop(Exception):
@@ -96,6 +109,43 @@ class PairedScorer:
                 return {"d": d, "t": t, "sd": sd, "st": st, "budget": b, "dense_cached": cached}
             self.budget = min(bd, bt)
             log.warning("OOM changed the batch layout; rescoring the pair with token budget %d", self.budget)
+
+
+class PairedLogprobScorer:
+    """The four letters' log-probabilities of the dense copy and the trial on the same rows with one identical batch
+    layout (``pool_signals.LogprobScorer``: MMLUScorer's prompt, sort and token-budget batching). If a CUDA OOM shrinks
+    either layout, both sides are rescored with the smaller budget."""
+
+    def __init__(self, dense_model, model, tok, fewshot, shots: int, max_len: int, max_batch_tokens: int):
+        from .pool_signals import LogprobScorer
+
+        self.d = LogprobScorer(dense_model, tok, fewshot, shots, max_len, max_batch_tokens)
+        self.t = LogprobScorer(model, tok, fewshot, shots, max_len, max_batch_tokens)
+        self.budget = int(max_batch_tokens)
+        self.dev = next(model.parameters()).device
+        self.evals = {"dense": 0, "trial": 0}
+
+    def _run(self, sc, rows, budget):
+        self.evals["dense" if sc is self.d else "trial"] += len(rows)
+        _sync(self.dev)
+        t0 = time.perf_counter()
+        res, b = sc.score(rows, budget)
+        _sync(self.dev)
+        return res, time.perf_counter() - t0, b
+
+    def score(self, rows: list[dict], dense: dict | None = None) -> dict:
+        """``dense``: a cached dense result for exactly these rows ({items, budget}) or None."""
+        while True:
+            b = self.budget
+            if dense is not None and int(dense["budget"]) == b:
+                d, sd, bd, cached = dense["items"], 0.0, b, True
+            else:
+                (d, sd, bd), cached = self._run(self.d, rows, b), False
+            t, st, bt = self._run(self.t, rows, b)
+            if bd == b and bt == b:
+                return {"d": d, "t": t, "sd": sd, "st": st, "budget": b, "dense_cached": cached}
+            self.budget = min(bd, bt)
+            log.warning("OOM changed the batch layout; rescoring the log-prob pair with token budget %d", self.budget)
 
 
 class PairedSource:
@@ -184,20 +234,78 @@ def partial_summary(plan, items: dict[str, list]) -> dict[str, dict]:
     return out
 
 
-def gate_pool(rc: dict, data) -> tuple[list[dict], dict]:
-    """The gate's question pool: the ranker's label set (default) or the whole pruning-time pool."""
+def sealed_qids(rc: dict) -> set[str]:
+    """``ranked_search.sealed_confirmation``: files listing the sealed confirmation items (a JSON list of qids, a JSON
+    object with ``qids``, or JSONL rows with ``qid``). Screening must never read them; only their ids are loaded."""
+    import json
+    from pathlib import Path
+
+    from .config import resolve_path
+
+    out: set[str] = set()
+    for p in (rc.get("ranked_search") or {}).get("sealed_confirmation") or []:
+        path = Path(resolve_path(rc, p))
+        text = path.read_text(encoding="utf-8")
+        if path.suffix == ".jsonl":  # split on newlines only: question text may hold U+2028 and other line separators
+            out |= {json.loads(line)["qid"] for line in text.split(chr(10)) if line.strip()}
+        else:
+            v = json.loads(text)
+            out |= set(v["qids"] if isinstance(v, dict) else v)
+    return out
+
+
+def screening_split(rc: dict, data) -> dict:
+    """The pruning-time (screening) pool in disjoint parts:
+
+    * ``gate``    the capability gate's items: the ranker's label set (default) or the whole pool;
+    * ``probe``   the ranker's probe split (``ranker.probe_per_domain`` per category, ``ranker.probe_seed``), used by
+                  the KL probe after a rank-1 rejection (protocol amendment 2);
+    * ``holdout`` (``ranked_search.counterfactual.enabled``) ``holdout_per_domain`` items per category carved out of
+                  the label set by seed for the counterfactual log; the gate and the probe never see them.
+
+    Every part is checked against the sealed confirmation set (``sealed_qids``); any overlap stops the run."""
+    from .adaptive.evaluator import question_order
     from .ranker import split_pool
 
     g = rc["gate"]["capability"]
     field, domains = g.get("domain_field", "category"), list(g["domains"])
-    rk = rc["ranker"]
-    kind = (rc.get("ranked_search") or {}).get("gate_pool", "label")
+    rk, rs = rc["ranker"], rc.get("ranked_search") or {}
+    kind = rs.get("gate_pool", "label")
     if kind == "full":
-        return list(data.mmlu_probe), {"kind": "full", "probe_excluded": 0}
-    if kind != "label":
+        G, P, info = list(data.mmlu_probe), [], {"kind": "full", "probe_excluded": 0}
+    elif kind == "label":
+        P, G = split_pool(data.mmlu_probe, field, domains, int(rk["probe_per_domain"]), int(rk["probe_seed"]))
+        info = {"kind": "label", "probe_excluded": len(P)}
+    else:
         raise ValueError(f"ranked_search.gate_pool must be label|full, got {kind!r}")
-    P, L = split_pool(data.mmlu_probe, field, domains, int(rk["probe_per_domain"]), int(rk["probe_seed"]))
-    return L, {"kind": "label", "probe_excluded": len(P)}
+    H: list[dict] = []
+    cf = rs.get("counterfactual") or {}
+    if cf.get("enabled"):
+        if kind != "label":
+            raise ValueError("the counterfactual hold-out needs ranked_search.gate_pool: label")
+        n, seed = int(cf["holdout_per_domain"]), int(cf.get("seed", 9091))
+        hold: set[str] = set()
+        for d in domains:
+            ids = [r["qid"] for r in G if r[field] == d]
+            if n >= len(ids):
+                raise ValueError(f"counterfactual hold-out {n} >= the {len(ids)} gate items of {d}")
+            hold |= set(question_order(ids, seed, f"holdout:{d}")[:n])
+        H, G = [r for r in G if r["qid"] in hold], [r for r in G if r["qid"] not in hold]
+        info["holdout"] = len(H)
+    sealed = sealed_qids(rc)
+    if sealed:
+        overlap = {name: len(sealed & {r["qid"] for r in part}) for name, part in (("gate", G), ("probe", P), ("holdout", H))}
+        if any(overlap.values()):
+            raise RuntimeError(f"screening items overlap the sealed confirmation set: {overlap}")
+        info["sealed_confirmation_qids"] = len(sealed)
+    return {"gate": G, "probe": P, "holdout": H, "info": info, "field": field, "domains": domains}
+
+
+def gate_pool(rc: dict, data) -> tuple[list[dict], dict]:
+    """The gate's question pool: the ranker's label set (default) or the whole pruning-time pool, minus the
+    counterfactual hold-out when that is enabled."""
+    s = screening_split(rc, data)
+    return s["gate"], s["info"]
 
 
 def gate_margin(rc: dict) -> float:
@@ -411,6 +519,175 @@ class RankedSearch:
         self.fallback_k = int(rs.get("fallback_k", 1))  # candidates tried per parent (1 = top-1 only)
         if self.fallback_k < 1:
             raise ValueError("ranked_search.fallback_k must be >= 1")
+        # ---- protocol amendment 2: after a rank-1 rejection, a KL probe over ranks 2-11 picks the fallback
+        self.fallback_policy = rs.get("fallback_policy", "topk")
+        if self.fallback_policy not in ("topk", "kl_probe"):
+            raise ValueError(f"ranked_search.fallback_policy must be topk|kl_probe, got {self.fallback_policy!r}")
+        self.split = screening_split(self.rc, ctx.data)
+        self.kl = self.cf = None
+        if self.fallback_policy == "kl_probe":
+            if self.fallback_k != 1:
+                raise ValueError("ranked_search.fallback_k must be 1 with fallback_policy: kl_probe")
+            kp = rs.get("kl_probe") or {}
+            self.kl = {"per_domain": int(kp.get("per_domain", 100)), "ranks": [int(x) for x in kp.get("ranks", [2, 11])],
+                       "batch_size": int(kp.get("batch_size", 100)), "order_seed": int(kp.get("order_seed", 2026))}
+            self.probe_rows, self.probe_sha = self._item_set(self.split["probe"], self.kl["per_domain"], self.kl["order_seed"])
+            self.n_probe = sum(len(v) for v in self.probe_rows.values())
+            self.lp_scorer = PairedLogprobScorer(self.dense_model, ctx.model, ctx.tok, ctx.data.mmlu_fewshot,
+                                                 int(t.get("shots", 0)), int(self.rc["model"].get("max_seq_len", 2048)),
+                                                 int(t.get("max_batch_tokens", 32768)))
+        cf = rs.get("counterfactual") or {}
+        if cf.get("enabled"):
+            if self.kl is None:
+                raise ValueError("ranked_search.counterfactual needs fallback_policy: kl_probe")
+            self.cf = {"batch_size": int(cf.get("batch_size", 100)), "charge_to_cap": bool(cf.get("charge_to_cap", False)),
+                       "seed": int(cf.get("seed", 9091))}
+            self.cf_rows, self.cf_sha = self._item_set(self.split["holdout"], None, self.cf["seed"])
+        if self.kl is not None:
+            self._write_split_record()
+
+    # ---------------------------------------------------------------- amendment 2: KL probe and counterfactual log
+    def _item_set(self, rows: list[dict], per_domain: int | None, seed: int) -> tuple[dict[str, list[dict]], str]:
+        """Rows by category in a seeded order (the first ``per_domain`` of each category if given) and a hash of the
+        resulting id lists."""
+        import hashlib
+        import json
+
+        field = self.split["field"]
+        out = {}
+        for d in self.split["domains"]:
+            by = {r["qid"]: r for r in rows if r[field] == d}
+            ids = question_order(sorted(by), seed, d)
+            if per_domain is not None:
+                if per_domain > len(ids):
+                    raise ValueError(f"{d}: {per_domain} probe items requested, {len(ids)} in the probe split")
+                ids = ids[:per_domain]
+            out[d] = [by[q] for q in ids]
+        sha = hashlib.sha256(json.dumps({d: [r["qid"] for r in v] for d, v in out.items()}, sort_keys=True).encode())
+        return out, sha.hexdigest()[:16]
+
+    def _write_split_record(self) -> None:
+        from .utils.io import atomic_write_json
+
+        p = self.ctx.run_dir / "screening_split.json"
+        rec = {"gate_qids": sorted(r["qid"] for r in self.split["gate"]), "info": self.split["info"],
+               "probe": {d: [r["qid"] for r in v] for d, v in self.probe_rows.items()}, "probe_set_sha16": self.probe_sha,
+               "holdout": {d: [r["qid"] for r in v] for d, v in self.cf_rows.items()} if self.cf else None,
+               "holdout_set_sha16": self.cf_sha if self.cf else None,
+               "sealed_confirmation": (self.rc.get("ranked_search") or {}).get("sealed_confirmation") or []}
+        if not p.exists():
+            atomic_write_json(p, rec)
+
+    def _score_set(self, tag: str, trial_hash: str, rows_by_cat: dict[str, list[dict]], set_sha: str, batch: int):
+        """Score the candidate currently applied to the model and the dense copy on a fixed item set. Every batch is
+        persisted (dense and candidate answers in one record) BEFORE it is used, under keys that depend only on the
+        candidate's mask, the item set and the batch, so an interrupted probe replays to the same answers."""
+        cache = self.ctx.eval_cache
+        out, st = {}, {"items": 0, "scored": 0, "replayed": 0, "dense_scored": 0, "seconds": 0.0, "dense_seconds": 0.0}
+        for cat in sorted(rows_by_cat):
+            rows = rows_by_cat[cat]
+            for i in range(0, len(rows), batch):
+                b_rows = rows[i : i + batch]
+                bkey = f"{set_sha}|{cat}|{i}|{len(b_rows)}"
+                pk, dk = f"{tag}|{trial_hash}|{bkey}", f"{tag}_dense|{bkey}"
+                rec = cache.get(pk)
+                if rec is None:
+                    check_stop()
+                    res = self.lp_scorer.score(b_rows, cache.get(dk))
+                    rec = {"d": {q: v["logp"] for q, v in res["d"].items()}, "dc": {q: v["correct"] for q, v in res["d"].items()},
+                           "t": {q: v["logp"] for q, v in res["t"].items()}, "tc": {q: v["correct"] for q, v in res["t"].items()},
+                           "budget": res["budget"], "st": res["st"], "sd": res["sd"]}
+                    put = {pk: rec}
+                    if not res["dense_cached"]:
+                        put[dk] = {"items": res["d"], "budget": res["budget"]}
+                        st["dense_scored"] += len(b_rows)
+                    cache.put_many(put)  # one transaction: the pair (with its dense side) and the dense reference
+                    fault_point(f"mid_{tag}")
+                    st["scored"] += len(b_rows)
+                    st["seconds"] += float(res["st"])
+                    st["dense_seconds"] += float(res["sd"])
+                else:
+                    st["replayed"] += len(b_rows)
+                st["items"] += len(b_rows)
+                for r in b_rows:
+                    q = r["qid"]
+                    out[q] = (rec["d"][q], rec["t"][q], int(rec["dc"][q]), int(rec["tc"][q]))
+        return out, st
+
+    def _score_candidates(self, ranks: list[int], ranked: list[dict], act, tag: str, rows_by_cat, set_sha: str, batch: int):
+        """Build each ranked action on the parent, score it on the item set, restore the parent (verified at the end)."""
+        from .ranker import canon, mask_hash
+
+        ctx = self.ctx
+        digest = weights_digest(ctx.state)
+        out = []
+        tot = {"items": 0, "scored": 0, "replayed": 0, "dense_scored": 0, "seconds": 0.0, "dense_seconds": 0.0}
+        for r in ranks:
+            c = ranked[r - 1]
+            parent_masks = dict(ctx.state.masks)
+            changed, _ = build_trial(ctx.state, ctx.dense, c["units"], act, self.rc, self.geo)
+            h = mask_hash(ctx.state)
+            res, st = self._score_set(tag, h, rows_by_cat, set_sha, batch)
+            for n in changed:
+                ctx.state.masks[n] = parent_masks[n]
+            if changed:
+                ctx.state.apply(ctx.dense, only=changed)
+            for k in tot:
+                tot[k] += st[k]
+            out.append({"rank": r, "kind": c["kind"], "action_key": canon(c["units"]), "mask_hash": h, "res": res})
+        if weights_digest(ctx.state) != digest:
+            raise RuntimeError("the parent was not restored exactly after scoring the probe candidates")
+        return out, tot
+
+    @staticmethod
+    def _category_signals(res: dict, rows_by_cat: dict[str, list[dict]]) -> dict:
+        from .signals import item_terms, signal_means
+
+        out = {}
+        for cat, rows in rows_by_cat.items():
+            q = [r["qid"] for r in rows]
+            t = item_terms(np.array([res[x][0] for x in q]), np.array([res[x][1] for x in q]),
+                           np.array([int(r["answer"]) for r in rows]), np.array([res[x][2] for x in q]),
+                           np.array([res[x][3] for x in q]))
+            out[cat] = signal_means(t, np.ones(len(q), bool))
+        return out
+
+    def _kl_probe(self, ranks: list[int], ranked: list[dict], act) -> dict:
+        """Score ranks 2-11 on the probe items and pick by ``signals.pick_action`` on KL (the matched-signals rule);
+        the S1c, TV and net-flip picks are recorded too (secondary, not used)."""
+        from .signals import pick_action, worst_category
+
+        cands, st = self._score_candidates(ranks, ranked, act, "kl_probe", self.probe_rows, self.probe_sha,
+                                           self.kl["batch_size"])
+        vals = [self._category_signals(c["res"], self.probe_rows) for c in cands]
+        picks = {s: ranks[pick_action(vals, ranks, s)] for s in ("S2", "S1c", "TV", "S0")}
+        return {"ranks": ranks, "choice_rank": picks["S2"], "signal": "S2 (KL over A-D)",
+                "selection_rule": "capprune.signals.pick_action", "probe_set_sha16": self.probe_sha,
+                "items_per_category": {d: len(v) for d, v in self.probe_rows.items()}, "picks": picks,
+                "candidates": [{"rank": c["rank"], "kind": c["kind"], "action_key": c["action_key"], "mask_hash": c["mask_hash"],
+                                "worst": {s: round(worst_category(v, s), 6) for s in ("S0", "S2", "S1c", "TV")},
+                                "by_category": {d: {s: round(x, 6) for s, x in sv.items()} for d, sv in v.items()}}
+                               for c, v in zip(cands, vals)],
+                "cost": {"paired_items_charged": len(ranks) * self.n_probe, **st}}
+
+    def _counterfactual(self, ranked: list[dict], act, probe: dict) -> dict:
+        """The KL, S1c and TV picks and gradient rank 2, each scored on the held-out slice that neither the gate nor the
+        probe uses (net flip loss per category vs. the dense copy). Recorded only; never used for a decision."""
+        picks = {"KL": probe["picks"]["S2"], "S1c": probe["picks"]["S1c"], "TV": probe["picks"]["TV"], "gradient rank 2": 2}
+        ranks = sorted(set(picks.values()))
+        cands, st = self._score_candidates(ranks, ranked, act, "counterfactual", self.cf_rows, self.cf_sha,
+                                           self.cf["batch_size"])
+        by_rank = {}
+        for c in cands:
+            per = {d: float(np.mean([c["res"][r["qid"]][2] - c["res"][r["qid"]][3] for r in rows]))
+                   for d, rows in self.cf_rows.items()}
+            by_rank[str(c["rank"])] = {"kind": c["kind"], "action_key": c["action_key"], "mask_hash": c["mask_hash"],
+                                       "holdout_net_flip": {d: round(v, 6) for d, v in per.items()},
+                                       "worst": round(max(per.values()), 6)}
+        n = sum(len(v) for v in self.cf_rows.values())
+        return {"picks": picks, "by_rank": by_rank, "holdout_set_sha16": self.cf_sha,
+                "items_per_category": {d: len(v) for d, v in self.cf_rows.items()},
+                "charged_to_cap": self.cf["charge_to_cap"], "cost": {"paired_items": len(ranks) * n, **st}}
 
     def _fb(self) -> dict:
         return self.S.setdefault("fallback", {"k": self.fallback_k, "triggers": 0, "rescued": 0, "failed": 0,
@@ -496,7 +773,8 @@ class RankedSearch:
         rho_prev = ctx.state.global_sparsity()
         parent_hash = mask_hash(ctx.state)
         pending = S.get("pending")  # a fallback: the next-ranked action of the SAME parent, profile and shortlist
-        rank = int(pending["rank"]) if pending else 1
+        kl_pending = bool(pending) and pending.get("mode") == "kl_probe"  # amendment 2: the probe picks the rank
+        rank = int(pending["rank"]) if pending and not kl_pending else 1
         prof_t = int(pending["profile_attempt"]) if pending else t
         if pending and pending["parent_mask_hash"] != parent_hash:
             raise RuntimeError(f"attempt {t}: fallback parent {pending['parent_mask_hash']} != restored parent {parent_hash}")
@@ -518,6 +796,53 @@ class RankedSearch:
             S["iteration"] = t + 1
             self._journal({**rec, "outcome": "stop", "gate_decision": "none", "stop_reason": "no_legal_candidate"})
             return
+        probe_rec = cf_rec = None
+        if kl_pending:
+            lo, hi = self.kl["ranks"]
+            ranks = list(range(max(lo, 2), min(hi, len(ranked)) + 1))
+            charge = len(ranks) * self.n_probe
+            left = None if self.cap is None else self.cap - S["questions"]
+            if not ranks or (left is not None and charge > left):
+                S["pending"] = None
+                if ranks:  # the probe's items count against the question cap: a budget stop before anything is scored
+                    self._fb()["blocked_by_cap"] += 1
+                    S["stop_reason"] = "question_cap"
+                    S["budget_stop"] = {"when": "before_kl_probe", "attempt": t, "left": left, "needed": charge}
+                else:
+                    S["stop_reason"] = "fallback_exhausted"
+                S["iteration"] = t + 1
+                self._journal({**rec, "rank": None, "outcome": BUDGET_STOP if ranks else "stop", "gate_decision": "none",
+                               "stop_reason": S["stop_reason"], "kl_probe": {"blocked": S.get("budget_stop") or "no ranks"}})
+                return
+            t0 = self._clock()
+            probe_rec = self._kl_probe(ranks, ranked, act)
+            tim["kl_probe_s"] = self._lap(t0)
+            S["questions"] += charge  # charged to the arm's question cap; reported separately below
+            kp = S.setdefault("kl_probe", {"probes": 0, "paired_items_charged": 0, "dense_items_scored": 0,
+                                           "items_scored": 0, "items_replayed": 0, "seconds": 0.0, "choices": []})
+            kp["probes"] += 1
+            kp["paired_items_charged"] += charge
+            kp["dense_items_scored"] += probe_rec["cost"]["dense_scored"]
+            kp["items_scored"] += probe_rec["cost"]["scored"]
+            kp["items_replayed"] += probe_rec["cost"]["replayed"]
+            kp["seconds"] += tim["kl_probe_s"]
+            kp["choices"].append({"attempt": t, "trigger_attempt": pending["trigger_attempt"], "rank": probe_rec["choice_rank"]})
+            rank = probe_rec["choice_rank"]
+            rec["rank"] = rank
+            fault_point("ranked_after_kl_probe")
+            if self.cf is not None:
+                t0 = self._clock()
+                cf_rec = self._counterfactual(ranked, act, probe_rec)
+                tim["counterfactual_s"] = self._lap(t0)
+                cs = S.setdefault("counterfactual", {"logs": 0, "paired_items": 0, "items_scored": 0, "dense_items_scored": 0,
+                                                     "seconds": 0.0, "charged_to_cap": self.cf["charge_to_cap"]})
+                cs["logs"] += 1
+                cs["paired_items"] += cf_rec["cost"]["paired_items"]
+                cs["items_scored"] += cf_rec["cost"]["scored"]
+                cs["dense_items_scored"] += cf_rec["cost"]["dense_scored"]
+                cs["seconds"] += tim["counterfactual_s"]
+                if self.cf["charge_to_cap"]:
+                    S["questions"] += cf_rec["cost"]["paired_items"]
         top = ranked[rank - 1]
         action = top["units"]
         want = self.prefix["attempts"].get(t) if self.prefix else None
@@ -598,7 +923,12 @@ class RankedSearch:
             else:
                 outcome = "rollback"
                 S["rollbacks"] += 1
-                if rank < self.fallback_k and rank < len(ranked):
+                if self.kl is not None and rank == 1 and len(ranked) >= 2:
+                    fallback_triggered = True  # amendment 2: the next proposal is the KL probe's pick among ranks 2-11
+                    self._fb()["triggers"] += 1
+                    S["pending"] = {"mode": "kl_probe", "rank": None, "profile_attempt": prof_t, "parent_mask_hash": parent_hash,
+                                    "shortlist": [s["action_key"] for s in short], "trigger_attempt": t}
+                elif rank < self.fallback_k and rank < len(ranked):
                     # top-k: the parent is restored (verified above); the next-ranked action becomes the next proposal
                     fallback_triggered = True
                     if rank == 1:
@@ -663,13 +993,19 @@ class RankedSearch:
         b = S["budget"]
         b["probe_questions"] = S["questions"]
         b["probe_tests"] += 1
+        if probe_rec is not None:
+            b["kl_probe_paired_items"] = b.get("kl_probe_paired_items", 0) + probe_rec["cost"]["paired_items_charged"]
+            b["kl_probe_seconds"] = b.get("kl_probe_seconds", 0.0) + tim.get("kl_probe_s", 0.0)
+        if cf_rec is not None:
+            b["counterfactual_paired_items"] = b.get("counterfactual_paired_items", 0) + cf_rec["cost"]["paired_items"]
+            b["counterfactual_seconds"] = b.get("counterfactual_seconds", 0.0) + tim.get("counterfactual_s", 0.0)
         for k, key in (("profile_s", "profile_seconds"), ("build_s", "build_seconds"), ("gate_s", "gate_seconds"),
                        ("gate_trial_scoring_s", "gate_scoring_seconds"),
                        ("gate_dense_reference_s", "gate_dense_reference_seconds"), ("rollback_s", "rollback_seconds"),
                        ("attempt_s", "search_wall_seconds")):
             b[key] = b.get(key, 0.0) + tim.get(k, 0.0)
         gpu_s = sum(tim.get(k, 0.0) for k in ("profile_s", "build_s", "gate_trial_scoring_s", "gate_dense_reference_s",
-                                               "rollback_s"))
+                                               "rollback_s", "kl_probe_s", "counterfactual_s"))
         if rank > 1:  # the extra cost of the fallback candidates
             fb = self._fb()
             fb["extra_questions"] += src.used
@@ -696,6 +1032,9 @@ class RankedSearch:
             gpu_seconds=round(gpu_s, 4), parent_verified=parent_ok, rollback_verified=rollback_ok,
             trial_params_removed=trial_params, params_removed=self.params_removed(), evaluations=evals,
             evaluations_cumulative=dict(ev), prefix_check=prefix_check, stop_reason=S["stop_reason"])
+        if self.kl is not None:
+            rec.update(fallback_policy="kl_probe", kl_probe=probe_rec, counterfactual=cf_rec,
+                       gate_questions=src.used, kl_probe_items_charged=probe_rec["cost"]["paired_items_charged"] if probe_rec else 0)
         S["history"].append({k: rec[k] for k in ("iteration", "outcome", "gate_decision", "cand_id", "rho_candidate",
                                                  "questions_cumulative")})
         self._journal(rec)
@@ -704,5 +1043,6 @@ class RankedSearch:
         log.info("attempt %d: %s | rank %d %s %s | MLP sparsity %.4f -> %.4f | gate %s n=%d (cum %d) | %s %s %+.2f pts%s",
                  t, outcome.upper(), rank, top["kind"], short[rank - 1]["layers"], rho_prev, rho_c, decision, src.used,
                  S["questions"], "blocked by" if failed else "largest estimate", worst, 100 * (doms[worst]["est"] or 0.0),
-                 " -> fallback to rank %d queued" % (rank + 1) if fallback_triggered else (" (rescued)" if rescued else ""))
+                 (" -> KL probe queued" if self.kl is not None else " -> fallback to rank %d queued" % (rank + 1))
+                 if fallback_triggered else (" (rescued)" if rescued else ""))
         S["iteration"] = t + 1

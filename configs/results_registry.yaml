@@ -145,10 +145,19 @@ experiments:
     title: "Matched-signal test on ordinary parents (ranker trajectories, 13 x 11) vs. the stall parents; policy recommendation"
     folder: matched-signals-ordinary
     configs: [configs/matched_signals_ordinary.yaml, docs/matched_signal_plan_ordinary.md]
-    reports: [matched-signals-ordinary/comparison.md, matched-signals-ordinary/report.md, matched-signals-ordinary/after_rejection.md]
+    reports: [matched-signals-ordinary/comparison.md, matched-signals-ordinary/report.md, matched-signals-ordinary/after_rejection.md,
+              matched-signals-ordinary/tv_posthoc.md]
     docs: docs/matched_signals_ordinary.md
     extractor: matched_signals_ordinary
-    label: exploratory (pre-registered parent list, plan and split; parents as units; after-rejection table post hoc)
+    label: exploratory (pre-registered parent list, plan and split; parents as units; after-rejection and TV tables post hoc)
+  - id: kl-probe-smoke-qwen
+    title: "GPU smoke test of the amendment-2 proposer (KL probe after a rank-1 rejection, counterfactual log) on Qwen3-1.7B"
+    folder: _smoke/kl-probe-qwen
+    configs: [configs/kl_probe_smoke_qwen.yaml]
+    reports: []
+    docs: docs/screen_confirm_protocol.md
+    extractor: kl_probe_smoke
+    label: smoke test (NOT a result; rank-1 reject forced by the test hook)
   - id: unstructured
     title: "Unstructured-mode CAP-Prune matrix (started, never progressed past setup)"
     folder: unstructured

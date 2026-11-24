@@ -1,4 +1,4 @@
-# Screen-then-confirm protocol (v1, amendment 1 of 2026-11-23)
+# Screen-then-confirm protocol (v1, amendments 1 and 2 of 2026-11-23)
 
 Committed before any new scoring. It separates the two jobs that the live gate currently does at once:
 * **screening:** choosing which steps to take, cheaply, on the reused pruning-time pool;
@@ -45,14 +45,76 @@ unchanged.
 
   The Clopper-Pearson union bound is conservative, so the realised error is well under α.
 
-## 1. Screening (choose the steps)
+## Amendment 2 (2026-11-23): the screening proposer, made before any confirmatory run
+
+**What changes:** the proposer and the stopping rule of screening (section 1). The gate and confirmation are
+unchanged.
+
+**Policy:**
+* Gradient top-1 at every parent.
+* After a rank-1 rejection, run a **KL probe** over ranks 2–11:
+  * 100 items per category, on probe items disjoint from the gate's items;
+  * charged to the arm's budget.
+* Gate KL's choice, and stop if that is rejected too.
+
+**Why** ([`matched_signals_ordinary.md`](matched_signals_ordinary.md), merged in `18d8a43`):
+* **Where the gate accepted rank 1** (12 ordinary parents), KL's choice was worse than rank 1: 5 better, 7 worse,
+  sign test p = 0.77. A probe at every step would cost budget and lose accuracy.
+* **Where the gate rejected rank 1** (4 parents):
+  * KL beat rank 1 at 3 of 4, under the pre-registered rule;
+  * KL beat the gradient's rank 2 (the top-2 fallback) at 3 of 4, post hoc, with mean regret 0.49 vs 1.29 points.
+* **The evidence is thin:** 4 parents, not significant. The benefit of this policy is therefore claim **C6** of the
+  confirmatory study, a **secondary** claim.
+* **S1c and total variation (TV) are recorded as secondary signals, not adopted.** S1c had the lowest regret of the
+  measured signals, but it was not a policy option in the plan.
+
+**Edits to amendment 2 (2026-11-23, approved; commit `3f16846` stays the record of the original wording):**
+1. **Budget.** Probe items count against the arm's **question cap**, not only the proposal cap. They are reported
+   separately in the cost accounting:
+   * per probe: `kl_probe.cost` in the journal;
+   * per run: `kl_probe` and `budget.kl_probe_paired_items` in the search state.
+2. **Selection rule.** The KL selection uses exactly the aggregation of the matched-signal evidence: the shared
+   function **`capprune.signals.pick_action`**, applied to `signals.signal_means` of `signals.item_terms`.
+3. **Probe set for confirmatory models.** For each confirmatory model, the probe set is 100 items per category from
+   that model's own screening pool, disjoint from its gate items and from its sealed confirmation set. Both are
+   defined in the confirmatory plan.
+
+## 1. Screening (choose the steps), as amended
 
 * **Gate:** the existing exact finite-pool capability gate. It is threshold-aware, uses the ranker's 5,214-item label
   set, budget = pool, α = 0.05 per side, minimum sample = batch = 100, uniform spending, a fresh question order per
   attempt, and a **3-point** tolerance per category.
-* **Proposer:** gradient top-1, with the ranker's candidate generator and the matched 1,280-channel step.
-* **Stop:** at the first top-1 rejection (or inconclusive decision), or when a cap is reached (30 proposals, 100,000
-  paired gate questions).
+* **Proposer:** gradient top-1 at every parent, with the ranker's candidate generator, the matched 1,280-channel step
+  and the 11-action shortlist (amendment 2).
+* **After a rank-1 rejection (or inconclusive decision): the KL probe.**
+  * **Probe items:** 100 items per category from the model's screening pool, disjoint from its gate items and from
+    its sealed confirmation set, and the same items at every probe.
+    * For Qwen3-1.7B this is the ranker's probe split: 400 items drawn by seed 4242 from the pruning-time pool,
+      disjoint from the gate's 5,214 items.
+    * For confirmatory models, the probe and confirmation sets are defined in the confirmatory plan.
+    * The live loop refuses to run if any probe, gate or counterfactual item is in a listed sealed confirmation set
+      (`ranked_search.sealed_confirmation`).
+  * **Scoring:** the dense model and the parent's ranks 2–11 on the probe items, with the gate's 0-shot prompt, in
+    identical batches. Dense answers are scored once and cached.
+  * **Signal and choice:** per category, the mean KL(dense ‖ candidate), with both distributions renormalised over
+    A–D. Choose the action with the lowest worst-category value; ties go to the lower gradient rank. This is exactly
+    the matched-signal aggregation: `capprune.signals.pick_action` on `signals.signal_means` of `signals.item_terms`.
+  * **Gate:** KL's choice goes through the same gate, with its own attempt number and question order.
+    * Accept: it becomes the new parent, and gradient top-1 resumes.
+    * Reject or inconclusive: stop.
+  * **Budget:** every probe is charged to the arm.
+    * 10 actions × 400 = **4,000 paired items** count against the arm's question cap. That is checked before the probe
+      starts: a probe that would exceed the cap is not run, and the run ends with a budget stop.
+    * The 400 dense items are scored the first time and then cached; like the gate's dense references, they are not
+      charged.
+    * KL's choice also counts as a proposal toward the 30-proposal cap.
+    * Probe costs are reported separately from gate costs.
+  * **Recorded, not used for any decision:** per probe and candidate, on the probe items:
+    * the net flip loss (S0);
+    * S1c, the Δ log p(correct) over A–D on dense-correct items;
+    * TV, the total variation ½ Σ |p − q| over A–D renormalised.
+* **Stop:** when KL's choice is rejected (or inconclusive), or when a cap is reached (30 proposals, 100,000 paired
+  questions, probe items included).
 * **What a screening accept means:** loss on the pool's items only. It is not a claim about new items.
 
 ## 2. Confirmation (certify the result), as amended
@@ -117,3 +179,17 @@ The expected lost and gained rates are p± = (q ± true loss)/2, and every bound
 ## Status
 
 This is a protocol for future runs. No confirmation has been run, and no confirmation item has been scored.
+
+The amendment-2 proposer is implemented in the live loop (`ranked_search.fallback_policy: kl_probe`, with
+`ranked_search.counterfactual` for the C6 log). It is tested on CPU (`tests/test_kl_probe.py`). On Qwen3-1.7B it has
+been run only as a GPU smoke test, which is not a result: `configs/kl_probe_smoke_qwen.yaml`,
+`~/cap-prune-runs/_smoke/kl-probe-qwen/`, commit `3e34d1e`, clean tree.
+* The rank-1 accept at attempt 1 was forced to a reject by the test hook.
+* The probe scored ranks 2–11 on 4,000 paired items plus 400 dense items in 35.7 s, and its KL pick (rank 3,
+  layers 24–27) was accepted.
+* The counterfactual scored 400 paired items in 4.9 s.
+* The 8,428 sealed final-split IDs were checked against the screening items.
+* Two earlier smoke launches failed before scoring anything: the sealed-file parser (`34de4e9`), then a syntax error
+  in its fix (`3e34d1e`). They are kept under `~/cap-prune-runs/_smoke/`.
+
+No confirmatory screening run has been made.

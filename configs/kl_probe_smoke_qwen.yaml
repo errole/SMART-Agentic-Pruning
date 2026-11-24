@@ -1,0 +1,22 @@
+# GPU SMOKE TEST of the screen-then-confirm amendment-2 proposer on Qwen3-1.7B. This is NOT an experiment and its
+# numbers are not results: it only checks that the KL probe, the counterfactual log and their cost accounting run on
+# the real model. Two proposals at most; the CAPPRUNE_TEST_FORCE_REJECT hook turns the rank-1 ACCEPT at attempt 1 into
+# a REJECT, so attempt 2 is the KL probe's pick.
+#   $env:CAPPRUNE_TEST_FORCE_REJECT = "1"
+#   python -m capprune supervise --config configs/kl_probe_smoke_qwen.yaml
+extends: gradient_live_ext.yaml
+
+experiment:
+  runs_dir: ~/cap-prune-runs/_smoke/kl-probe-qwen
+
+ranked_search:
+  max_proposals: 2
+  question_cap: 100000
+  verify_prefix: null
+  fallback_policy: kl_probe
+  kl_probe: {per_domain: 100, ranks: [2, 11], batch_size: 100, order_seed: 2026}
+  counterfactual: {enabled: true, holdout_per_domain: 50, seed: 9091, batch_size: 50, charge_to_cap: false}
+  sealed_confirmation: [~/cap-prune-runs/data/mmlu_final.jsonl]   # stand-in: the held-out MMLU split is never read
+
+gradient_live:
+  out_dir: ~/cap-prune-runs/_smoke/kl-probe-qwen/_analysis
