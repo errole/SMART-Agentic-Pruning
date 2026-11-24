@@ -1,4 +1,4 @@
-# Screen-then-confirm protocol (v1, amendment 1 of 2026-11-23)
+# Screen-then-confirm protocol (v1, amendments 1 and 2 of 2026-11-23)
 
 Committed before any new scoring. It separates the two jobs that the live gate currently does at once:
 * **screening:** choosing which steps to take, cheaply, on the reused pruning-time pool;
@@ -45,14 +45,58 @@ unchanged.
 
   The Clopper-Pearson union bound is conservative, so the realised error is well under α.
 
-## 1. Screening (choose the steps)
+## Amendment 2 (2026-11-23): the screening proposer, made before any confirmatory run
+
+**What changes:** the proposer and the stopping rule of screening (section 1). The gate and confirmation are
+unchanged.
+
+**Policy:**
+* Gradient top-1 at every parent.
+* After a rank-1 rejection, run a **KL probe** over ranks 2–11:
+  * 100 items per category, on probe items disjoint from the gate's items;
+  * charged to the arm's budget.
+* Gate KL's choice, and stop if that is rejected too.
+
+**Why** ([`matched_signals_ordinary.md`](matched_signals_ordinary.md), merged in `18d8a43`):
+* **Where the gate accepted rank 1** (12 ordinary parents), KL's choice was worse than rank 1: 5 better, 7 worse,
+  sign test p = 0.77. A probe at every step would cost budget and lose accuracy.
+* **Where the gate rejected rank 1** (4 parents):
+  * KL beat rank 1 at 3 of 4, under the pre-registered rule;
+  * KL beat the gradient's rank 2 (the top-2 fallback) at 3 of 4, post hoc, with mean regret 0.49 vs 1.29 points.
+* **The evidence is thin:** 4 parents, not significant. The benefit of this policy is therefore claim **C6** of the
+  confirmatory study, a **secondary** claim.
+* **S1c and total variation (TV) are recorded as secondary signals, not adopted.** S1c had the lowest regret of the
+  measured signals, but it was not a policy option in the plan.
+
+## 1. Screening (choose the steps), as amended
 
 * **Gate:** the existing exact finite-pool capability gate. It is threshold-aware, uses the ranker's 5,214-item label
   set, budget = pool, α = 0.05 per side, minimum sample = batch = 100, uniform spending, a fresh question order per
   attempt, and a **3-point** tolerance per category.
-* **Proposer:** gradient top-1, with the ranker's candidate generator and the matched 1,280-channel step.
-* **Stop:** at the first top-1 rejection (or inconclusive decision), or when a cap is reached (30 proposals, 100,000
-  paired gate questions).
+* **Proposer:** gradient top-1 at every parent, with the ranker's candidate generator, the matched 1,280-channel step
+  and the 11-action shortlist (amendment 2).
+* **After a rank-1 rejection (or inconclusive decision): the KL probe.**
+  * **Probe items:** the ranker's probe split.
+    * 100 items per category (400), drawn by seed 4242 from the pruning-time pool.
+    * Disjoint from the gate's 5,214 items, and the same items at every probe.
+    * They are not confirmation items.
+  * **Scoring:** the dense model and the parent's ranks 2–11 on the probe items, with the gate's 0-shot prompt, in
+    identical batches. Dense answers are scored once and cached.
+  * **Signal and choice:** per category, the mean KL(dense ‖ candidate), with both distributions renormalised over
+    A–D. Choose the action with the lowest worst-category value; ties go to the lower gradient rank.
+  * **Gate:** KL's choice goes through the same gate, with its own attempt number and question order.
+    * Accept: it becomes the new parent, and gradient top-1 resumes.
+    * Reject or inconclusive: stop.
+  * **Budget:** every probe is charged to the arm.
+    * 10 actions × 400 = **4,000 paired items** count toward the paired-question cap, plus 400 dense items the first
+      time.
+    * KL's choice counts as a proposal toward the 30-proposal cap.
+  * **Recorded, not used for any decision:** per probe and candidate, on the probe items:
+    * the net flip loss (S0);
+    * S1c, the Δ log p(correct) over A–D on dense-correct items;
+    * TV, the total variation ½ Σ |p − q| over A–D renormalised.
+* **Stop:** when KL's choice is rejected (or inconclusive), or when a cap is reached (30 proposals, 100,000 paired
+  questions, probe items included).
 * **What a screening accept means:** loss on the pool's items only. It is not a claim about new items.
 
 ## 2. Confirmation (certify the result), as amended
@@ -117,3 +161,6 @@ The expected lost and gained rates are p± = (q ± true loss)/2, and every bound
 ## Status
 
 This is a protocol for future runs. No confirmation has been run, and no confirmation item has been scored.
+
+The amendment-2 proposer is not yet implemented in the live loop. The existing `ranked_search` supports gradient
+top-k fallback (`fallback_k`), not the KL probe.
