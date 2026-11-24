@@ -185,3 +185,14 @@ def test_screening_never_read_the_sealed_items(study, pilot):
     # the confirm phase is the only reader, and only after the freeze
     assert json.loads((study["out"] / "batches" / "pilot" / "frozen.json").read_text())["frozen_at"] < \
            (study["out"] / "confirm" / "scores.sqlite").stat().st_mtime
+
+
+def test_supervisor_counts_the_heartbeat_of_a_worker_launched_through_a_launcher():
+    """Regression (found in the pilot): on Windows the venv's python.exe is a launcher, so the worker that writes the
+    heartbeat has a different pid from the launched process; the supervisor must still see its heartbeats."""
+    from capprune.supervisor import heartbeat_ts
+
+    started = 1000.0
+    assert heartbeat_ts({"pid": 7, "ts": 1500.0, "started": 1001.0}, 7, started) == 1500.0     # same pid
+    assert heartbeat_ts({"pid": 8, "ts": 1500.0, "started": 1001.0}, 7, started) == 1500.0     # launcher child
+    assert heartbeat_ts({"pid": 8, "ts": 990.0, "started": 900.0}, 7, started) == 0.0         # an earlier, killed worker
