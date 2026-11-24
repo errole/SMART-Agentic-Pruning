@@ -190,12 +190,14 @@ def _pool_signals(root: Path, folder: str) -> list[str]:
 
 
 def _screen_confirm(root: Path, folder: str) -> list[str]:
-    S = _opt(root / folder / "confirmation_sizes.json")
-    if not S:
-        return []
-    n80 = {c: v["needed"]["1.0"]["n80_final"] for c, v in S["categories"].items()}
-    return [f"confirmation items per category for 80 % power at a true loss of 1.0 pt (final-checkpoint q): "
-            + ", ".join(f"{c} {n:,}" for c, n in n80.items()) + f" (total {sum(n80.values()):,})"]
+    out = []
+    for name, label in (("confirmation_sizes.json", "v1 (Bonferroni)"), ("confirmation_sizes_v2.json", "amendment 1 (IUT + fixed sequence)")):
+        S = _opt(root / folder / name)
+        if S:
+            n80 = {c: v["needed"]["1.0"]["n80_final"] for c, v in S["categories"].items()}
+            out.append(f"{label}: confirmation items per category for 80 % power at a true loss of 1.0 pt (final-checkpoint q): "
+                       + ", ".join(f"{c} {n:,}" for c, n in n80.items()) + f" (total {sum(n80.values()):,})")
+    return out
 
 
 def _matched_signals(root: Path, folder: str) -> list[str]:
@@ -211,8 +213,21 @@ def _matched_signals(root: Path, folder: str) -> list[str]:
     return out
 
 
+def _matched_signals_ordinary(root: Path, folder: str) -> list[str]:
+    S = _opt(root / folder / "comparison.json")
+    if not S:
+        return []
+    r, lead = S["recommendation"], S["lead"]["gate accepted rank 1"]["by_n"]
+    out = [f"recommendation (pre-registered rule, n = {r['n']}): {r['policy']}"]
+    for n, b in lead.items():
+        out.append(f"n={n}: where the gate accepted rank 1 ({b['kl_beats'] + b['kl_matches'] + b['kl_worse']} parents) KL "
+                   f"beats/matches/worse {b['kl_beats']}/{b['kl_matches']}/{b['kl_worse']}, mean KL - rank 1 "
+                   f"{100 * b['mean_diff']:+.2f} pts (sign p {b['p_two_sided']:.2f})")
+    return out
+
+
 EXTRACTORS = {"population_regate": _population_regate, "pool_signals": _pool_signals, "screen_confirm": _screen_confirm,
-              "matched_signals": _matched_signals, "search_runs": _search_runs, "ranked_run": _ranked_run, "boundary": _boundary, "compare": _compare,
+              "matched_signals": _matched_signals, "matched_signals_ordinary": _matched_signals_ordinary, "search_runs": _search_runs, "ranked_run": _ranked_run, "boundary": _boundary, "compare": _compare,
               "ranker": _ranker, "fixed_state": _fixed_state, "gap": _gap, "adaptive_replay": _adaptive_replay,
               "gate_design": _gate_design}
 

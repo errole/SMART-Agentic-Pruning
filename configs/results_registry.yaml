@@ -126,10 +126,10 @@ experiments:
     extractor: pool_signals
     label: exploratory, descriptive (n = 7)
   - id: screen-confirm
-    title: "Screen-then-confirm protocol v1: confirmation sample sizes per category (no confirmation run yet)"
+    title: "Screen-then-confirm protocol (v1 + amendment 1: IUT, fixed sequence): confirmation sample sizes (no confirmation run yet)"
     folder: screen-confirm
-    configs: [configs/screen_confirm.yaml, docs/screen_confirm_protocol.md]
-    reports: [screen-confirm/confirmation_sizes.md]
+    configs: [configs/screen_confirm.yaml, configs/screen_confirm_v2.yaml, docs/screen_confirm_protocol.md]
+    reports: [screen-confirm/confirmation_sizes.md, screen-confirm/confirmation_sizes_v2.md]
     docs: docs/screen_confirm_protocol.md
     extractor: screen_confirm
     label: protocol (committed before any new scoring); sample-size planning only
@@ -141,6 +141,14 @@ experiments:
     docs: docs/matched_signals.md
     extractor: matched_signals
     label: exploratory (pre-registered plan and split; gate-pool items only, no audit sets)
+  - id: matched-signals-ordinary
+    title: "Matched-signal test on ordinary parents (ranker trajectories, 13 x 11) vs. the stall parents; policy recommendation"
+    folder: matched-signals-ordinary
+    configs: [configs/matched_signals_ordinary.yaml, docs/matched_signal_plan_ordinary.md]
+    reports: [matched-signals-ordinary/comparison.md, matched-signals-ordinary/report.md, matched-signals-ordinary/after_rejection.md]
+    docs: docs/matched_signals_ordinary.md
+    extractor: matched_signals_ordinary
+    label: exploratory (pre-registered parent list, plan and split; parents as units; after-rejection table post hoc)
   - id: unstructured
     title: "Unstructured-mode CAP-Prune matrix (started, never progressed past setup)"
     folder: unstructured
