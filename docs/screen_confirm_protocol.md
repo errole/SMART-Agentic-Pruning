@@ -180,5 +180,6 @@ The expected lost and gained rates are p± = (q ± true loss)/2, and every bound
 
 This is a protocol for future runs. No confirmation has been run, and no confirmation item has been scored.
 
-The amendment-2 proposer is not yet implemented in the live loop. The existing `ranked_search` supports gradient
-top-k fallback (`fallback_k`), not the KL probe.
+The amendment-2 proposer is implemented in the live loop (`ranked_search.fallback_policy: kl_probe`, with
+`ranked_search.counterfactual` for the C6 log). It is tested on CPU (`tests/test_kl_probe.py`), and on Qwen3-1.7B it has
+been run only as a GPU smoke test. No confirmatory screening run has been made.
