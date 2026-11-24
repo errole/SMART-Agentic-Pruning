@@ -27,6 +27,8 @@
   population-regate retrospective population-level re-gating of finished runs (CPU): register | run
   pool-signals      4-letter log-probabilities on the gate pool and continuous paired signals: score | analyze
   screen-confirm    screen-then-confirm protocol: confirmation sample sizes per category: sizes
+  confirmatory      the pre-registered confirmatory study: build-data (seal) | admissibility | freeze | confirm |
+                    report
   matched-signals   equal-size actions of stall / ranker parents: KL vs. net flip as choice signals: register | score | analyze |
                     compare | after-rejection, tv-posthoc (post hoc)
   results-index     one index of every experiment: configs, code hashes, commit, reports, headline numbers
@@ -389,6 +391,25 @@ def cmd_pool_signals(args) -> int:
     return 0
 
 
+def cmd_confirmatory(args) -> int:
+    from . import confirmatory as cf
+    from .utils.log import setup_logging
+
+    setup_logging()
+    cfg = _cfg(args)
+    if args.phase in ("freeze", "confirm", "report") and not args.batch:
+        raise SystemExit(f"confirmatory {args.phase} needs --batch")
+    fn = {"build-data": lambda: cf.build_data(cfg), "admissibility": lambda: cf.admissibility(cfg),
+          "freeze": lambda: cf.freeze(cfg, args.batch), "confirm": lambda: cf.confirm(cfg, args.batch),
+          "report": lambda: cf.report(cfg, args.batch)}[args.phase]
+    p = fn()
+    if p.suffix == ".md":
+        print(p.read_text(encoding="utf-8"))
+    print()
+    print(f"written: {p}")
+    return 0
+
+
 def cmd_matched_signals(args) -> int:
     from . import matched_signals as ms
     from .utils.log import setup_logging
@@ -505,6 +526,10 @@ def main(argv=None) -> int:
     p = sub.add_parser("screen-confirm"); common(p)
     p.add_argument("phase", choices=["sizes"])
     p.set_defaults(fn=cmd_screen_confirm)
+    p = sub.add_parser("confirmatory"); common(p)
+    p.add_argument("phase", choices=["build-data", "admissibility", "freeze", "confirm", "report"])
+    p.add_argument("--batch", help="a batch of runs named in confirmatory.batches (freeze / confirm / report)")
+    p.set_defaults(fn=cmd_confirmatory)
     p = sub.add_parser("matched-signals"); common(p)
     p.add_argument("phase", choices=["register", "score", "analyze", "compare", "after-rejection",
                                           "tv-posthoc"])

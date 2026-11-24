@@ -1,0 +1,109 @@
+# The confirmatory study (docs/confirmatory_study_plan.md): settings shared by both confirmatory models. A model's own
+# config (confirmatory_smollm3.yaml, confirmatory_granite.yaml) extends this file with the model, its data and run
+# folders, its split seed and its step geometry. Qwen3-1.7B is the development model; nothing here applies to it.
+#
+#   python -m capprune prepare        --config configs/confirmatory_<model>.yaml     # tokenized C4 / PPL sets (no scoring)
+#   python -m capprune confirmatory build-data    --config configs/confirmatory_<model>.yaml   # SEAL, before any scoring
+#   python -m capprune confirmatory admissibility --config ...                       # first scoring (gate pool only)
+#   python -m capprune supervise                  --config ... --set "matrix.seeds=[0]"   # a batch of runs
+#   python -m capprune confirmatory freeze        --config ... --batch pilot
+#   python -m capprune confirmatory confirm       --config ... --batch pilot
+#   python -m capprune confirmatory report        --config ... --batch pilot
+extends: gradient_live.yaml
+
+data:
+  mmlu: {dataset: cais/mmlu, revision: c30699e8356da336a370243923dbaf21066bb9fe, probe_fraction: 0.4}
+
+search:
+  ppl_rollback_threshold: 0.15     # arm (a): tau = 15 % relative perplexity increase over the parent (base paper)
+
+profiling:
+  gradient_checkpointing: true     # the 2,048-token backward pass of a 3B model does not fit next to the dense copy on a
+                                   # 32 GB GPU without it; same computation (bitwise identical profile, measured)
+
+ranked_search:
+  selector: gradient
+  max_proposals: 30                # cap: gated proposals per run (KL picks included)
+  question_cap: 100000             # cap: paired screening questions per run, KL-probe items included
+  gate_pool: label                 # gate items = screening pool - probe set - hold-out slice
+  candidate_stream: 0
+  verify_prefix: null
+  fallback_k: 1
+  screening_holdout: {per_domain: 200, seed: 9091}   # carved out of the gate items in EVERY arm (same gate pool)
+  kl_probe: {per_domain: 100, ranks: [2, 11], batch_size: 100, order_seed: 2026}
+  counterfactual: {enabled: false, batch_size: 100, charge_to_cap: false, seed: 9091}
+
+gate:
+  capability:
+    tolerance: 0.03
+    budget: 1000000                # = the whole gate pool (make_gate takes min(budget, pool))
+
+ranker:
+  probe_per_domain: 100            # the probe set: 100 items per category of the screening pool
+  probe_seed: 4242
+  random_actions: 2
+  traj_seed: 1000
+  profile_seed: 0
+
+methods:
+  ppl_top1:                        # arm (a): perplexity-rollback screen, gradient top-1
+    kind: ranked_search
+    overrides: {gate: {kind: capability, capability: {policy: threshold_aware}}, ranked_search: {screen: perplexity, ppl_tau: 0.15}}
+  cap_top1:                        # arm (b): capability gate at 3 points, gradient top-1
+    kind: ranked_search
+    overrides: {gate: {kind: capability, capability: {policy: threshold_aware}}}
+  cap_klprobe:                     # arm (c): as (b), KL probe after a rank-1 rejection (amendment 2) + counterfactual log
+    kind: ranked_search
+    overrides: {gate: {kind: capability, capability: {policy: threshold_aware}},
+                ranked_search: {fallback_policy: kl_probe, counterfactual: {enabled: true}}}
+
+matrix:
+  methods: [ppl_top1, cap_top1, cap_klprobe]
+  targets: [0.0]
+  seeds: [0, 1, 2]
+
+final_eval: {mmlu: false, freebaseqa: false, wikitext: false}
+benchmark: {enabled: false}
+
+confirmatory:
+  plan_file: ../docs/confirmatory_study_plan.md
+  alpha: 0.05
+  tolerance: 0.03
+  true_losses: [0.0, 0.01, 0.015]
+  confirmation_per_category: {STEM: 3600, Humanities: 3000, Social Sciences: 3000, Other: 3500}
+  probe_per_category: 100
+  holdout_per_category: 200
+  min_gate_per_category: 600       # reserved for the gate before the confirmation set is drawn
+  confirm_order_seed: 2027
+  admissibility: {overall_min: 0.40, per_category_min: 0.30}
+  planning_rates: {regate: ~/cap-prune-runs/population-regate/regate.json, run: A, final_attempt: 15}
+  batches:
+    pilot: [[ppl_top1, 0], [cap_top1, 0], [cap_klprobe, 0]]
+    main: [[ppl_top1, 1], [cap_top1, 1], [cap_klprobe, 1], [ppl_top1, 2], [cap_top1, 2], [cap_klprobe, 2]]
+  sources:
+    mmlu_prepared_dir: ~/cap-prune-runs/data       # identical to cais/mmlu @ c30699e8 (test, validation, dev; checked)
+    mmlu_dataset: {repo: cais/mmlu, revision: c30699e8356da336a370243923dbaf21066bb9fe}
+    mmlu_file_sha256:
+      mmlu_probe.jsonl: 4fbb96420259fb41936336a636712d7c9668b138406c7eb90998ff64d46e1e6a
+      mmlu_final.jsonl: ea2706f62e2e263e2c5b44679af277a1eb772db40b6b3586f25b5df9f7bfb608
+      mmlu_dev.jsonl: ae5a3d55647671cdbfa9d2da88671d18d0c865c47110e784caa1fd2fd381c872
+      mmlu_fewshot.jsonl: 3c4b207bdd5cf5bfef7170b1f1a874fff755c3980390bda44c6b0d17a09a923e
+    mmlu_cf:
+      repo: microsoft/MMLU-CF
+      revision: c25b89a968a2062e422dd96ddf0fe3387507f0dd
+      raw_dir: ~/cap-prune-runs/data-audit/raw/mmlu-cf-c25b89a
+      files:
+        Biology: 7eec128cffcfec814461505d4b5122dc3fa4887a580b42a73fa7e03593c7d519
+        Business: 18dd545578e39df12812dd53076a96b76c1091760519a59f68bf58d1e314f47c
+        Chemistry: 063d66470358b32fd8dc532524845e97c349dd21983ba928b9d5d97c98539f77
+        Computer_Science: f973467d01a0bf62c5c6ab6cc60b7d286ae743d3157040d1d37938842d11580c
+        Economics: 93f2aa69542d7e625a938ea6626ef7f545563ec21b6014a75e5e3e6993c08068
+        Engineering: b54c3da63bd9664f54df773eaf13d896c9bca804ba3ca0f7fae0ff1a8946adff
+        Health: ffcae5b83c00ccb19f8b93f5191608da8ad7a1b0fcc94fbe5095455c2d30b9a9
+        History: 9b610a66bb01899aafc0080ac1695604615075d15dda2999d52907bb408b7d39
+        Law: 09873234f0abacfdcff2115187e51d1808b104cfd25ae150c26ed46c6a131168
+        Math: abec3c0c0e615acf45072422d51c55f4ffdd731aa4ad71a589bfa6830e89b6b0
+        Other: 9a5614da0ae1100cf9fe2985aa4ddb745b29cfc84824eddf21ddf24c0be6a013
+        Philosophy: 43fcbfa03ed9b315f98eda44bf23fad79b16c4ff8bfca3c74cd0987368e85d67
+        Physics: cff3650ea352476ba41733a7a4f0b99dc7ce07be95641f3fa4dca90d52705c5d
+        Psychology: 320642aeb3ad2fe52ec7821cb648418de53001ea44bc4fb65932ff15b98b4eab

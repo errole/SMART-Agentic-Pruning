@@ -215,6 +215,13 @@ class PairedSource:
         return out
 
 
+class _NoQuestions:
+    """The perplexity screen reveals no gate questions."""
+    used = dense_q = replayed_q = 0
+    t_trial = t_dense = 0.0
+    items: dict = {}
+
+
 def partial_summary(plan, items: dict[str, list]) -> dict[str, dict]:
     """Per-category estimate and bounds at the last completed look (for a gate stopped by the question cap)."""
     out = {}
@@ -280,10 +287,13 @@ def screening_split(rc: dict, data) -> dict:
         raise ValueError(f"ranked_search.gate_pool must be label|full, got {kind!r}")
     H: list[dict] = []
     cf = rs.get("counterfactual") or {}
-    if cf.get("enabled"):
+    # the hold-out slice: ``ranked_search.screening_holdout`` carves it in EVERY arm (so arms with and without the
+    # counterfactual log gate on the same items); otherwise the counterfactual's own setting carves it when enabled
+    hspec = rs.get("screening_holdout") or (cf if cf.get("enabled") else None)
+    if hspec:
         if kind != "label":
-            raise ValueError("the counterfactual hold-out needs ranked_search.gate_pool: label")
-        n, seed = int(cf["holdout_per_domain"]), int(cf.get("seed", 9091))
+            raise ValueError("the hold-out slice needs ranked_search.gate_pool: label")
+        n, seed = int(hspec.get("per_domain", hspec.get("holdout_per_domain"))), int(hspec.get("seed", 9091))
         hold: set[str] = set()
         for d in domains:
             ids = [r["qid"] for r in G if r[field] == d]
@@ -298,7 +308,27 @@ def screening_split(rc: dict, data) -> dict:
         if any(overlap.values()):
             raise RuntimeError(f"screening items overlap the sealed confirmation set: {overlap}")
         info["sealed_confirmation_qids"] = len(sealed)
-    return {"gate": G, "probe": P, "holdout": H, "info": info, "field": field, "domains": domains}
+    out = {"gate": G, "probe": P, "holdout": H, "info": info, "field": field, "domains": domains}
+    reg = rs.get("split_registration")
+    if reg:  # the confirmatory study's sealed registration: the run must reproduce its sets exactly, or not start
+        from .config import resolve_path
+        from .utils.io import read_json
+
+        want = read_json(resolve_path(rc, reg))["sets"]
+        got = {"gate": qid_set_sha(G), "probe": qid_set_sha(P), "holdout": qid_set_sha(H),
+               "confirmation": qid_set_sha([{"qid": q} for q in sealed])}
+        bad = {k: (got[k][:12], want[k]["sha256"][:12]) for k in got if got[k] != want[k]["sha256"]}
+        if bad:
+            raise RuntimeError(f"screening split does not match the sealed registration {reg}: {bad}")
+        info["split_registration_verified"] = True
+    return out
+
+
+def qid_set_sha(rows: list[dict]) -> str:
+    """SHA-256 of a set of items: the sorted qids joined by newlines."""
+    import hashlib
+
+    return hashlib.sha256("\n".join(sorted(r["qid"] for r in rows)).encode()).hexdigest()
 
 
 def gate_pool(rc: dict, data) -> tuple[list[dict], dict]:
@@ -385,7 +415,7 @@ def profile_parent(model, state, calib, rc: dict, batch_store: dict, hb=None):
     g_idx = np.sort(prng.choice(calib.shape[0], size=min(int(pp["gradient_samples"]), calib.shape[0]), replace=False))
     act = collect_act_sqnorm(model, state, calib[a_idx], batch_store, hb, int(pp.get("activation_batch_size", 4)))
     sens = sensitivity(state, act, float(rc["pruning"].get("sensitivity_percentile", 10)))
-    grad = collect_grad_importance(model, state, calib[g_idx], hb)
+    grad = collect_grad_importance(model, state, calib[g_idx], hb, checkpointing=bool(pp.get("gradient_checkpointing", False)))
     return act, sens, grad
 
 
@@ -520,6 +550,17 @@ class RankedSearch:
         if self.fallback_k < 1:
             raise ValueError("ranked_search.fallback_k must be >= 1")
         # ---- protocol amendment 2: after a rank-1 rejection, a KL probe over ranks 2-11 picks the fallback
+        # ---- the screen: the capability gate (default) or the perplexity rollback of the base paper (confirmatory arm a)
+        self.screen = rs.get("screen", "capability")
+        if self.screen not in ("capability", "perplexity"):
+            raise ValueError(f"ranked_search.screen must be capability|perplexity, got {self.screen!r}")
+        if self.screen == "perplexity":
+            self.tau = float(rs.get("ppl_tau", self.rc["search"]["ppl_rollback_threshold"]))
+            if rs.get("fallback_policy", "topk") != "topk" or self.fallback_k != 1:
+                raise ValueError("the perplexity screen is top-1 only (no fallback)")
+            if "ppl0" not in self.S:  # the dense model's perplexity, on the never-modified dense copy (cached)
+                self.S["ppl0"] = self._perplexity("dense", model=self.dense_model)
+            self.S.setdefault("ppl", self.S["ppl0"])
         self.fallback_policy = rs.get("fallback_policy", "topk")
         if self.fallback_policy not in ("topk", "kl_probe"):
             raise ValueError(f"ranked_search.fallback_policy must be topk|kl_probe, got {self.fallback_policy!r}")
@@ -545,6 +586,22 @@ class RankedSearch:
             self.cf_rows, self.cf_sha = self._item_set(self.split["holdout"], None, self.cf["seed"])
         if self.kl is not None:
             self._write_split_record()
+
+    def _perplexity(self, trial_hash: str, model=None) -> float:
+        """Perplexity of the trial (or ``model``) on the pruning-time PPL set, persisted before use (crash replay gives
+        the same value)."""
+        from .eval.perplexity import perplexity
+
+        man = self.ctx.data.manifest["files"]
+        key = f"ppl|{trial_hash}|{man['ppl_gate.safetensors']['sha256'][:16]}"
+        rec = self.ctx.eval_cache.get(key)
+        if rec is None:
+            self.ctx.hb.beat("gate", "perplexity")
+            rec = {"ppl": float(perplexity(model or self.ctx.model, self.ctx.data.ppl_gate, self.ctx.S["batch"],
+                                           "ppl_gate_bs", 4, self.ctx.hb))}
+            self.ctx.eval_cache.put(key, rec)
+            fault_point("ranked_after_perplexity")
+        return float(rec["ppl"])
 
     # ---------------------------------------------------------------- amendment 2: KL probe and counterfactual log
     def _item_set(self, rows: list[dict], per_domain: int | None, seed: int) -> tuple[dict[str, list[dict]], str]:
@@ -873,16 +930,25 @@ class RankedSearch:
         # ---- gate (cumulative question cap enforced inside the item source)
         seed = attempt_order_seed(self.gate.base_seed, int(rc["run"]["seed"]), t)
         cap_left = None if self.cap is None else self.cap - S["questions"]
-        src = PairedSource(self.gate.pool, seed, trial_hash, self.scorer, ctx.eval_cache, cap_left, hb=ctx.hb)
         t0 = self._clock()
         looks = steps = trace = None
         stop_note = None
-        try:
-            run = evaluate_candidate(src, make_policy(self.gate.policy_name), self.gate.plan, cand_id)
-            decision, doms = run.decision, domain_summary(run)
-            looks, steps, trace = run.looks_reached, run.steps, run.trace
-        except BudgetStop as e:
-            decision, doms, stop_note = BUDGET_STOP, partial_summary(self.gate.plan, src.items), str(e)
+        ppl_rec = None
+        if self.screen == "perplexity":  # arm (a): relative perplexity increase over the parent on the C4 PPL set
+            src = _NoQuestions()
+            ppl_c = self._perplexity(trial_hash)
+            ratio = (ppl_c - S["ppl"]) / S["ppl"]
+            decision, doms = (ACCEPT if ratio <= self.tau else REJECT), {}
+            ppl_rec = {"ppl_parent": S["ppl"], "ppl_trial": ppl_c, "relative_increase": ratio, "tau": self.tau,
+                       "ppl0": S["ppl0"]}
+        else:
+            src = PairedSource(self.gate.pool, seed, trial_hash, self.scorer, ctx.eval_cache, cap_left, hb=ctx.hb)
+            try:
+                run = evaluate_candidate(src, make_policy(self.gate.policy_name), self.gate.plan, cand_id)
+                decision, doms = run.decision, domain_summary(run)
+                looks, steps, trace = run.looks_reached, run.steps, run.trace
+            except BudgetStop as e:
+                decision, doms, stop_note = BUDGET_STOP, partial_summary(self.gate.plan, src.items), str(e)
         tim["gate_s"] = self._lap(t0)
         forced = _test_forced_reject(t, rank, decision)
         if forced:  # test hook (inert unless CAPPRUNE_TEST_FORCE_REJECT is set): exercises the fallback's rescue path
@@ -899,6 +965,8 @@ class RankedSearch:
             fault_point("ranked_after_masks")
             S.update(state_id=cand_id, rho=rho_c, accepts=S["accepts"] + 1)
             S["parent_digest"] = weights_digest(ctx.state)  # the trial is the next parent
+            if ppl_rec is not None:
+                S["ppl"] = ppl_rec["ppl_trial"]
             outcome = "accept"
             S["pending"] = None
             if rank > 1:
@@ -1023,7 +1091,9 @@ class RankedSearch:
             channels_match=all(actual[u] == action[u] * mult for u in action),
             rho_candidate=round(rho_c, 6), rho_after=round(S["rho"], 6),
             outcome=outcome, gate_decision=decision,
-            gate={"kind": "capability", "policy": self.gate.policy_name, "decision": decision, "questions": src.used,
+            gate={"kind": "perplexity", "decision": decision, "questions": 0, **ppl_rec, "order_seed": None,
+                  "domains": {}, "pool": {**self.pool_info, "size": len(self.pool)}} if ppl_rec is not None else
+                 {"kind": "capability", "policy": self.gate.policy_name, "decision": decision, "questions": src.used,
                   "budget": self.gate.budget, "cap_left": cap_left, "order_seed": seed, "domains": doms,
                   "tolerance": self.gate.settings.tolerance, "looks": looks, "steps": steps, "trace": trace,
                   "dense_reference_questions": src.dense_q, "replayed_questions": src.replayed_q,
@@ -1039,6 +1109,8 @@ class RankedSearch:
                                                  "questions_cumulative")})
         self._journal(rec)
         failed = [d for d in doms if doms[d]["status"] == "fail"]
+        if not doms:  # perplexity screen
+            doms = {f"PPL +{100 * ppl_rec['relative_increase']:.2f} % (tau {100 * self.tau:.0f} %)": {"est": 0.0}}
         worst = failed[0] if failed else max(doms, key=lambda d: doms[d]["est"] if doms[d]["est"] is not None else -9)
         log.info("attempt %d: %s | rank %d %s %s | MLP sparsity %.4f -> %.4f | gate %s n=%d (cum %d) | %s %s %+.2f pts%s",
                  t, outcome.upper(), rank, top["kind"], short[rank - 1]["layers"], rho_prev, rho_c, decision, src.used,

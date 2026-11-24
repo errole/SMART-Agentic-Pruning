@@ -1,0 +1,30 @@
+# Confirmatory model 1: SmolLM3-3B-Base (Hugging Face SmolLM family; Apache-2.0; not gated). See confirmatory.yaml.
+extends: confirmatory.yaml
+
+model:
+  name_or_path: HuggingFaceTB/SmolLM3-3B-Base
+  revision: d78a42f79198603e614095753484a04c10c2b940
+
+experiment:
+  runs_dir: ~/cap-prune-runs/confirmatory/smollm3-3b/runs
+  data_dir: ~/cap-prune-runs/data-smollm3-3b
+
+ranker:   # 36 layers x 11,008 MLP channels (172 blocks of 64): 4 units x 12 blocks = 3,072 channels = 0.775 % of MLP channels
+  step_blocks: 48
+  shortlist: {units_per_action: 4, blocks_per_unit: 12, window_starts: [0, 4, 8, 12, 16, 20, 24, 28, 32]}
+
+ranked_search:
+  sealed_confirmation: [~/cap-prune-runs/confirmatory/smollm3-3b/sealed/confirmation_qids.json]
+  split_registration: ~/cap-prune-runs/confirmatory/smollm3-3b/registration.json
+
+gradient_live:
+  method: cap_top1
+  out_dir: ~/cap-prune-runs/confirmatory/smollm3-3b/_analysis
+
+confirmatory:
+  model_key: smollm3-3b
+  out_dir: ~/cap-prune-runs/confirmatory/smollm3-3b
+  split_seed: 2026112401
+  model_files:
+    model-00001-of-00002.safetensors: 7e270ac568ee1880ddbadad66ccdcd9906d52415e8904e2f300c75250b9c7d49
+    model-00002-of-00002.safetensors: c6a6e7690a66dcc386a6a9b456686e7c308d45cba884d116c928dafa7fa987ae

@@ -69,7 +69,21 @@ def _forward_no_logits(model, ids):
         return model(input_ids=ids, use_cache=False)
 
 
-def collect_grad_importance(model, state: PruneState, tokens: torch.Tensor, heartbeat=None) -> dict[str, float]:
+def _dropout_free(model) -> bool:
+    cfg = getattr(model, "config", None)
+    vals = [v for k, v in (cfg.to_dict() if cfg is not None else {}).items() if "drop" in k and isinstance(v, (int, float))]
+    return all(float(v) == 0.0 for v in vals) and not any(
+        isinstance(m, torch.nn.Dropout) and m.p > 0 for m in model.modules())
+
+
+def collect_grad_importance(model, state: PruneState, tokens: torch.Tensor, heartbeat=None,
+                            checkpointing: bool = False) -> dict[str, float]:
+    """Mean |grad| of every unit's kept weights over ``tokens`` (one sequence per backward pass).
+
+    ``checkpointing`` (``profiling.gradient_checkpointing``): activation checkpointing during the backward passes, for
+    models whose 2,048-token backward pass does not fit next to the dense copy. Hugging Face models only checkpoint in
+    train mode, so this runs the passes in train mode and refuses any model with non-zero dropout; the result is the
+    same computation (measured bitwise identical on SmolLM3-3B-Base)."""
     dev = next(model.parameters()).device
     params = []
     for u in state.units:
@@ -77,6 +91,11 @@ def collect_grad_importance(model, state: PruneState, tokens: torch.Tensor, hear
             lin.weight.requires_grad_(True)
             params.append(lin.weight)
     acc = {u.name: 0.0 for u in state.units}
+    if checkpointing:
+        if not _dropout_free(model):
+            raise RuntimeError("gradient checkpointing runs in train mode: the model must have no active dropout")
+        model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
+        model.train()
     try:
         for i in range(tokens.shape[0]):
             ids = tokens[i : i + 1].to(dev)
@@ -105,6 +124,9 @@ def collect_grad_importance(model, state: PruneState, tokens: torch.Tensor, hear
         for p in params:
             p.grad = None
             p.requires_grad_(False)
+        if checkpointing:
+            model.eval()
+            model.gradient_checkpointing_disable()
     n = max(1, tokens.shape[0])
     return {k: v / n for k, v in acc.items()}
 

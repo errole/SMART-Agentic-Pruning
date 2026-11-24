@@ -36,6 +36,17 @@ from .utils.log import get_logger, setup_logging
 log = get_logger("supervisor")
 
 
+def heartbeat_ts(hb: dict, pid: int, started: float) -> float:
+    """The heartbeat time of THIS worker, or 0. A heartbeat counts if its pid is the launched process, or if it was
+    written by a worker that started after the launch: on Windows a venv's python.exe is a launcher, so the
+    interpreter that writes the heartbeat has a different pid from the process the supervisor started (without
+    this, every worker was killed ``hang_timeout_s`` after its start whatever its progress). A heartbeat left by an
+    earlier, killed worker started before this launch and does not count."""
+    if hb.get("pid") == pid or float(hb.get("started", 0.0)) >= started - 5.0:
+        return float(hb["ts"])
+    return 0.0
+
+
 def build_plan(cfg: dict, methods=None, targets=None, seeds=None) -> list[dict]:
     mx = cfg.get("matrix", {})
     methods = methods or mx.get("methods") or list(cfg["methods"])
@@ -154,9 +165,7 @@ class Supervisor:
                 return p.returncode
             last = started
             try:
-                hb = read_json(hb_path)
-                if hb.get("pid") == p.pid:
-                    last = max(last, float(hb["ts"]))
+                last = max(last, heartbeat_ts(read_json(hb_path), p.pid, started))
             except Exception:
                 pass
             if time.time() - last > self.hang_timeout:
