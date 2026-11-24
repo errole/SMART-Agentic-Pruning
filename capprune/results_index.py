@@ -238,7 +238,19 @@ def _kl_probe_smoke(root: Path, folder: str) -> list[str]:
     return out
 
 
-EXTRACTORS = {"kl_probe_smoke": _kl_probe_smoke, "population_regate": _population_regate, "pool_signals": _pool_signals, "screen_confirm": _screen_confirm,
+def _confirmatory(root: Path, folder: str) -> list[str]:
+    out = []
+    for rp in sorted((root / folder / "batches").glob("*/report.json")):
+        S = _opt(rp)
+        for r in (S or {}).get("runs", []):
+            sf = (r.get("screened_final") or {}).get("params_removed", 0)
+            out.append(f"{S['model_key']} {S['batch']} {r['run_id']}: confirmed {r['confirmed_parameters_removed']:,} params "
+                       f"({100 * r['confirmed_fraction_removed']:.2f} %), checkpoint {r['claim_position']}; screened final {sf:,}; "
+                       f"stop {r['stop_reason']}")
+    return out
+
+
+EXTRACTORS = {"confirmatory": _confirmatory, "kl_probe_smoke": _kl_probe_smoke, "population_regate": _population_regate, "pool_signals": _pool_signals, "screen_confirm": _screen_confirm,
               "matched_signals": _matched_signals, "matched_signals_ordinary": _matched_signals_ordinary, "search_runs": _search_runs, "ranked_run": _ranked_run, "boundary": _boundary, "compare": _compare,
               "ranker": _ranker, "fixed_state": _fixed_state, "gap": _gap, "adaptive_replay": _adaptive_replay,
               "gate_design": _gate_design}

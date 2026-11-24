@@ -150,6 +150,22 @@ experiments:
     docs: docs/matched_signals_ordinary.md
     extractor: matched_signals_ordinary
     label: exploratory (pre-registered parent list, plan and split; parents as units; after-rejection and TV tables post hoc)
+  - id: confirmatory-smollm3-3b
+    title: "Confirmatory study, model 1 SmolLM3-3B-Base (pilot = seed 0, arms a/b/c, through confirmation)"
+    folder: confirmatory/smollm3-3b
+    configs: [configs/confirmatory.yaml, configs/confirmatory_smollm3.yaml, docs/confirmatory_study_plan.md]
+    reports: [confirmatory/smollm3-3b/registration.md, confirmatory/smollm3-3b/batches/pilot/report.md]
+    docs: docs/confirmatory_pilot_report.md
+    extractor: confirmatory
+    label: confirmatory (pre-registered plan v1, f0152c8); pilot batch only so far
+  - id: confirmatory-granite-3.3-2b
+    title: "Confirmatory study, model 2 Granite-3.3-2B-Base (sealed and admissible; not screened yet)"
+    folder: confirmatory/granite-3.3-2b
+    configs: [configs/confirmatory.yaml, configs/confirmatory_granite.yaml, docs/confirmatory_study_plan.md]
+    reports: [confirmatory/granite-3.3-2b/registration.md]
+    docs: docs/confirmatory_study_plan.md
+    extractor: confirmatory
+    label: confirmatory (sealed; no runs yet)
   - id: kl-probe-smoke-qwen
     title: "GPU smoke test of the amendment-2 proposer (KL probe after a rank-1 rejection, counterfactual log) on Qwen3-1.7B"
     folder: _smoke/kl-probe-qwen
