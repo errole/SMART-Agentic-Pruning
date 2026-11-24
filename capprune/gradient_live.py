@@ -247,8 +247,7 @@ def sealed_qids(rc: dict) -> set[str]:
         path = Path(resolve_path(rc, p))
         text = path.read_text(encoding="utf-8")
         if path.suffix == ".jsonl":  # split on newlines only: question text may hold U+2028 and other line separators
-            out |= {json.loads(l)["qid"] for l in text.split("
-") if l.strip()}
+            out |= {json.loads(line)["qid"] for line in text.split(chr(10)) if line.strip()}
         else:
             v = json.loads(text)
             out |= set(v["qids"] if isinstance(v, dict) else v)
