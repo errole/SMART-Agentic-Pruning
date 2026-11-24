@@ -1,0 +1,9 @@
+# Phase 2: continuous paired signals on the gate pool for run A's boundary checkpoints (plan: docs/pool_signals_plan.md).
+#   python -m capprune pool-signals score   --config configs/pool_signals.yaml   # GPU: dense + 7 states, 4-letter log-probs
+#   python -m capprune pool-signals analyze --config configs/pool_signals.yaml   # CPU: signals vs. exploratory audit losses
+extends: gradient_live_ext.yaml
+
+pool_signals:
+  plan_file: ../docs/pool_signals_plan.md
+  out_dir: ~/cap-prune-runs/pool-signals
+  runs_root: ~/cap-prune-runs

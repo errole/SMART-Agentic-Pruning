@@ -109,6 +109,22 @@ experiments:
     docs: docs/gradient_live.md
     extractor: compare
     label: exploratory
+  - id: population-regate
+    title: "Retrospective population-level re-gating of runs A/B/C (pre-registered rule v1, CPU)"
+    folder: population-regate
+    configs: [configs/population_regate.yaml, docs/population_gate_rule.md]
+    reports: [population-regate/report.md, population-regate/phase1_summary.md]
+    docs: docs/population_gate.md
+    extractor: population_regate
+    label: retrospective (pre-registered rule); audit comparisons exploratory
+  - id: pool-signals
+    title: "Continuous paired signals on the gate pool vs. exploratory audit losses (7 checkpoints)"
+    folder: pool-signals
+    configs: [configs/pool_signals.yaml, docs/pool_signals_plan.md]
+    reports: [pool-signals/report.md, pool-signals/phase2_summary.md]
+    docs: docs/population_gate.md
+    extractor: pool_signals
+    label: exploratory, descriptive (n = 7)
   - id: unstructured
     title: "Unstructured-mode CAP-Prune matrix (started, never progressed past setup)"
     folder: unstructured

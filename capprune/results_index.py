@@ -167,7 +167,29 @@ def _gate_design(root: Path, folder: str) -> list[str]:
     return [f"locked: {S['locked']}"] if S else []
 
 
-EXTRACTORS = {"search_runs": _search_runs, "ranked_run": _ranked_run, "boundary": _boundary, "compare": _compare,
+def _population_regate(root: Path, folder: str) -> list[str]:
+    S = _opt(root / folder / "regate.json")
+    out = []
+    for name, R in (S or {}).get("runs", {}).items():
+        fs = R.get("first_stop")
+        if fs:
+            frac = fs["params_removed_at_stop"] / (S.get("dense_parameters") or 1)
+            out.append(f"run {name}: first population non-accept at attempt {fs['attempt']} ({fs['decision']}; live {fs['live_decision']}) "
+                       f"-> stop with {100 * frac:.2f} % of parameters removed")
+    return out
+
+
+def _pool_signals(root: Path, folder: str) -> list[str]:
+    S = _opt(root / folder / "signals.json")
+    out = []
+    for t, d in (S or {}).get("comparison", {}).items():
+        out.append(f"{t}: Spearman per-category / worst / overall: " + "; ".join(
+            f"{s} {d[s]['per_category']['spearman']:+.2f}/{d[s]['worst']['spearman']:+.2f}/{d[s]['overall']['spearman']:+.2f}"
+            for s in d))
+    return out
+
+
+EXTRACTORS = {"population_regate": _population_regate, "pool_signals": _pool_signals, "search_runs": _search_runs, "ranked_run": _ranked_run, "boundary": _boundary, "compare": _compare,
               "ranker": _ranker, "fixed_state": _fixed_state, "gap": _gap, "adaptive_replay": _adaptive_replay,
               "gate_design": _gate_design}
 
