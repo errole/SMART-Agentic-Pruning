@@ -15,6 +15,7 @@
 | ⟨reg1⟩, ⟨reg2⟩ | `confirmatory/smollm3-3b/registration.json`, `confirmatory/granite-3.3-2b/registration.json` |
 | ⟨conf⟩ | `confirmatory/<model>/batches/<batch>/confirm.json` |
 | ⟨frontier⟩, ⟨curves⟩, ⟨mech⟩ | `exploratory/frontier.json`, `exploratory/loss_curves.json`, `exploratory/c1_mechanism.json` (EXPLORATORY) |
+| ⟨bdsim⟩, ⟨bdreal⟩ | `bound-dev/simulation.json`, `bound-dev/real_data.json` (method development on seen data; plan `docs/bound_development_plan.md`) |
 | ⟨plan⟩ | `docs/confirmatory_study_plan.md` |
 | ⟨report⟩ | `docs/confirmatory_report.md` |
 | ⟨dev⟩ | `docs/paper/workshop/tables/deviations.md` |
@@ -336,6 +337,15 @@ Certified compression grows with both the limit and n.
 **The 3-point column reproduces every recorded claim, and the S3 and S4 values;** the analysis checks this before
 writing ⟨frontier⟩.
 
+**A tighter per-category bound** (method development on seen data; it selects a method and is not a claim). The plan
+`docs/bound_development_plan.md` was committed before any candidate touched these data.
+* **Simulation:** an exact unconditional score test on the (lost, agree, gained) trinomial holds coverage ≥ 0.95 over
+  the plan's grid (worst 0.9502). At a 1-point true loss and 6–9 % disagreement, it needs 0.49–0.51× the items of the
+  Clopper–Pearson union bound ⟨bdsim⟩.
+* **These data:** it certifies no additional checkpoint on arm (a)'s trajectories. The checkpoints just past the
+  claims either miss narrowly or have estimates above 3 points ⟨bdreal⟩.
+* It adds one checkpoint in Granite's arm (c), seeds 0 and 1 ⟨bdreal⟩.
+
 ## 7. Limitations
 
 * **Two 2–3 B base models, three seeds, MMLU-format items only, 0-shot.** MMLU is public and may be in pretraining
@@ -393,8 +403,9 @@ far they overshoot and what they cost:
 **The hypotheses.** None of the three secondary hypotheses we pre-registered is supported, and one (C4) could not
 have been under this design.
 
-**What would raise the certifiable compression** (EXPLORATORY): a tighter per-category bound or larger confirmation
-sets.
+**What would raise the certifiable compression** (EXPLORATORY): larger confirmation sets, a looser limit, or a tighter
+per-category bound (§6). A bound that halves the items needed in simulation did not extend any perplexity-arm claim on
+these trajectories.
 
 ## References
 
