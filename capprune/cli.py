@@ -439,6 +439,15 @@ def cmd_bound_dev(args) -> int:
     return 0
 
 
+def cmd_paper_a(args) -> int:
+    from .paper_a import build
+
+    p = build(_cfg(args), Path(args.out))
+    print(p.read_text(encoding="utf-8"))
+    print(f"\nwritten: {p}")
+    return 0
+
+
 def cmd_matched_signals(args) -> int:
     from . import matched_signals as ms
     from .utils.log import setup_logging
@@ -564,6 +573,9 @@ def main(argv=None) -> int:
     p = sub.add_parser("bound-dev", help="bound development (docs/bound_development_plan.md; CPU)"); common(p)
     p.add_argument("phase", choices=["simulate", "apply"])
     p.set_defaults(fn=cmd_bound_dev)
+    p = sub.add_parser("paper-a", help="paper A figures and tables from run files (matplotlib)"); common(p)
+    p.add_argument("--out", default="docs/paper/workshop")
+    p.set_defaults(fn=cmd_paper_a)
     p = sub.add_parser("matched-signals"); common(p)
     p.add_argument("phase", choices=["register", "score", "analyze", "compare", "after-rejection",
                                           "tv-posthoc"])
