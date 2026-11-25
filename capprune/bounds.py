@@ -73,18 +73,17 @@ def cp_union_certifies(n: int, kp: int, km: int, alpha: float, tol: float) -> bo
     return cp_union_upper(n, kp, km, alpha) <= tol + 1e-12
 
 
-@lru_cache(maxsize=64)
-def _cp_vectors(n: int, alpha: float) -> tuple[np.ndarray, np.ndarray]:
+def cp_union_region(n: int, kp: np.ndarray, km: np.ndarray, alpha: float, tol: float) -> np.ndarray:
+    """The reference decision on many cells: the same cp_upper / cp_lower values as ``population_bounds`` (cached),
+    computed only for the counts that occur."""
     from .population_regate import cp_lower, cp_upper
 
-    up = np.array([cp_upper(k, n, alpha / 2) for k in range(n + 1)])
-    lo = np.array([cp_lower(k, n, alpha / 2) for k in range(n + 1)])
-    return up, lo
-
-
-def cp_union_region(n: int, kp: np.ndarray, km: np.ndarray, alpha: float, tol: float) -> np.ndarray:
-    up, lo = _cp_vectors(n, alpha)
-    return up[kp] - lo[km] <= tol + 1e-12
+    kp, km = np.asarray(kp), np.asarray(km)
+    up = {int(k): cp_upper(int(k), n, alpha / 2) for k in np.unique(kp)}
+    lo = {int(k): cp_lower(int(k), n, alpha / 2) for k in np.unique(km)}
+    u = np.vectorize(up.__getitem__, otypes=[float])(kp) if kp.size else np.zeros(0)
+    v = np.vectorize(lo.__getitem__, otypes=[float])(km) if km.size else np.zeros(0)
+    return u - v <= tol + 1e-12
 
 
 # ============================================================================ reference only: the normal (Wald) bound

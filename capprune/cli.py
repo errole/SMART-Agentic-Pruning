@@ -416,6 +416,29 @@ def cmd_confirmatory(args) -> int:
     return 0
 
 
+def cmd_exploratory(args) -> int:
+    from .exploratory import exploratory
+    from .utils.log import setup_logging
+
+    setup_logging()
+    p = exploratory(_cfg(args))
+    print(p.read_text(encoding="utf-8"))
+    print(f"\nwritten: {p}")
+    return 0
+
+
+def cmd_bound_dev(args) -> int:
+    from . import bound_dev as bd
+    from .utils.log import setup_logging
+
+    setup_logging()
+    cfg = _cfg(args)
+    p = {"simulate": bd.simulate, "apply": bd.apply}[args.phase](cfg)
+    print(p.read_text(encoding="utf-8"))
+    print(f"\nwritten: {p}")
+    return 0
+
+
 def cmd_matched_signals(args) -> int:
     from . import matched_signals as ms
     from .utils.log import setup_logging
@@ -536,6 +559,11 @@ def main(argv=None) -> int:
     p.add_argument("phase", choices=["build-data", "admissibility", "freeze", "confirm", "report", "study"])
     p.add_argument("--batch", help="a batch of runs named in confirmatory.batches (freeze / confirm / report)")
     p.set_defaults(fn=cmd_confirmatory)
+    p = sub.add_parser("exploratory", help="EXPLORATORY: frontier, loss curves, C1 mechanism (CPU, scored outcomes)"); common(p)
+    p.set_defaults(fn=cmd_exploratory)
+    p = sub.add_parser("bound-dev", help="bound development (docs/bound_development_plan.md; CPU)"); common(p)
+    p.add_argument("phase", choices=["simulate", "apply"])
+    p.set_defaults(fn=cmd_bound_dev)
     p = sub.add_parser("matched-signals"); common(p)
     p.add_argument("phase", choices=["register", "score", "analyze", "compare", "after-rejection",
                                           "tv-posthoc"])
