@@ -10,9 +10,11 @@ freeze         after a batch of runs ends: each run's accepted checkpoints, orde
                hashes; written and hashed before any confirmation item is read.
 confirm        amendment 1 exactly: per run, fixed-sequence testing over the frozen order (materialised checkpoint vs.
                dense in identical batches, Clopper-Pearson union bound, per-category IUT at alpha), stopping at the first
-               failure; the run's final checkpoint is also scored as description if it was not reached. Refuses unless
-               every run of the batch is frozen and the plan is committed.
-report         per-arm confirmed compression, per-category bounds, power achieved, costs and wall time.
+               failure. Amendment 3 (plan section 10): EVERY frozen checkpoint is scored and its per-item outcomes are
+               stored; the checkpoints after the first failure never enter the primary decision. Refuses unless every
+               run of the batch is frozen and the plan is committed.
+report         per-arm confirmed compression, per-category bounds, power achieved, costs and wall time; S1, S3, S4.
+study          the whole study across both models: primary endpoint paired across seeds, C1, C4, C6, S1-S4, costs.
 """
 from __future__ import annotations
 
@@ -520,12 +522,16 @@ def confirm(cfg: dict, batch: str) -> Path:
             T.update(rec["t"])
         return D, T
 
-    results = []
+    bdir = out / "batches" / batch
+    qids = [r["qid"] for r in rows]
+    cats_arr = np.array([r[field] for r in rows])
+    results, outcomes = [], {}
+    t_start = time.time()
     for o in runs:
-        log.info("confirming %s: %d frozen checkpoints", o["run_id"], len(o["order"]))
-        tested, final_desc = [], None
-        seq = []
-        for ck in o["order"]:
+        log.info("confirming %s: scoring all %d frozen checkpoints (amendment 3)", o["run_id"], len(o["order"]))
+        scored, seq = [], []
+        dense_rows, cand_rows = [], []
+        for ck in o["order"]:  # amendment 3: EVERY checkpoint, in the frozen order
             st = PruneState(units, mode)
             st.load(ck["mask_file"])  # masks only; the dense model's weights are not touched
             mat, _ = materialize(dm, st, rc)
@@ -533,45 +539,198 @@ def confirm(cfg: dict, batch: str) -> Path:
             sz = size_check(rc, dm, dm, mat, st, units)  # kept rows / columns == the dense weights at those indices
             D, T = score_pair(ck["mask_hash"], mat)
             counts = _paired_counts(D, T, rows, field)
-            r = iut_test(counts, alpha, tol)
-            tested.append({**{k: ck[k] for k in ("position", "attempt", "cand_id", "params_removed", "mlp_sparsity", "mask_hash", "pool_loss")},
+            dense_params = int(sz["dense_parameters"])
+            scored.append({**{k: ck[k] for k in ("position", "attempt", "cand_id", "params_removed", "mlp_sparsity", "mask_hash", "pool_loss")},
                            "materialized_parameters_removed": sz["parameters_removed"],
                            "fraction_of_total_parameters_removed": sz["fraction_of_total_parameters_removed"],
-                           "count_matches_masks": sz["count_matches_masks"], "counts": counts, **r})
+                           "count_matches_masks": sz["count_matches_masks"], "counts": counts, **iut_test(counts, alpha, tol)})
             seq.append({"id": ck["position"], "params_removed": ck["params_removed"], "counts": counts})
+            dense_rows.append(np.array([bool(D[q]) for q in qids]))
+            cand_rows.append(np.array([bool(T[q]) for q in qids]))
             del mat
             torch.cuda.empty_cache() if torch.cuda.is_available() else None
-            if not r["pass"]:
-                break
-        fs = fixed_sequence(seq, alpha, tol)  # the same decisions, through the protocol's function
+            log.info("  %s position %d: pass=%s (%.0f s since start)", o["run_id"], ck["position"], scored[-1]["pass"], time.time() - t_start)
+        # the PRIMARY decision, unchanged: fixed sequence over the frozen order, stopping at the first failure; the
+        # scores after the first failure never enter it
+        fs = fixed_sequence(seq, alpha, tol)
+        n_tested = len(fs["tested"])
+        tested, after = scored[:n_tested], scored[n_tested:]
+        for x in after:
+            x["label"] = "DESCRIPTIVE ONLY (after the first failure; amendment 3; not part of the primary claim)"
         claim = next((x for x in tested if x["position"] == fs["claim"]), None)
         last = o["order"][-1] if o["order"] else None
-        if last is not None and last["position"] not in {x["position"] for x in tested}:
-            st = PruneState(units, mode)
-            st.load(last["mask_file"])
-            mat, _ = materialize(dm, st, rc)
-            mat.eval()
-            sz = size_check(rc, dm, dm, mat, st, units)
-            D, T = score_pair(last["mask_hash"], mat)
-            counts = _paired_counts(D, T, rows, field)
-            final_desc = {**{k: last[k] for k in ("position", "attempt", "params_removed", "mlp_sparsity", "pool_loss")},
-                          "materialized_parameters_removed": sz["parameters_removed"], "counts": counts,
-                          **iut_test(counts, alpha, tol), "label": "DESCRIPTIVE ONLY (after the first failure; not part of any claim)"}
-            del mat
+        final_desc = after[-1] if after else None
+        npz = bdir / f"{o['run_id']}.outcomes.npz"
+        outcomes[o["run_id"]] = (npz, {"qids": np.array(qids), "category": cats_arr,
+                                       "dense": np.array(dense_rows, dtype=bool).reshape(len(scored), len(qids)),
+                                       "cand": np.array(cand_rows, dtype=bool).reshape(len(scored), len(qids)),
+                                       "position": np.array([x["position"] for x in scored], dtype=np.int64),
+                                       "params_removed": np.array([x["params_removed"] for x in scored], dtype=np.int64),
+                                       "materialized_parameters_removed": np.array([x["materialized_parameters_removed"] for x in scored], dtype=np.int64)})
         rec = {"run_id": o["run_id"], "method": o["method"], "seed": o["seed"], "frozen_checkpoints": len(o["order"]),
-               "tested": tested, "claim_position": fs["claim"],
+               "dense_parameters": dense_params if scored else None, "amendment": 3, "tested": tested, "scored_after_failure": after, "claim_position": fs["claim"],
                "confirmed_parameters_removed": claim["materialized_parameters_removed"] if claim else 0,
                "confirmed_fraction_removed": claim["fraction_of_total_parameters_removed"] if claim else 0.0,
-               "screened_final": {k: last[k] for k in ("position", "params_removed", "mlp_sparsity")} if last else None,
+               "screened_final": ({k: last[k] for k in ("position", "params_removed", "mlp_sparsity")}
+                                  | {"materialized_parameters_removed": scored[-1]["materialized_parameters_removed"],
+                                     "fraction_of_total_parameters_removed": scored[-1]["fraction_of_total_parameters_removed"]})
+               if last else None,
                "final_descriptive": final_desc}
-        atomic_write_json(out / "batches" / batch / f"{o['run_id']}.confirm.json", rec)
         results.append(rec)
     cache.close()
-    S = {"batch": batch, "runs": results, "confirmation_items": len(rows), "per_category": {c: sum(1 for r in rows if r[field] == c) for c in CATS},
-         "cost": cost, "alpha": alpha, "tolerance": tol, "commit": _git("rev-parse", "HEAD"),
+    # amendment 3, A3.4: a re-confirmed batch must reproduce its recorded primary claims; the earlier records are kept
+    old = bdir / "confirm.json"
+    if old.exists() and read_json(old).get("amendment") != 3:
+        prev = {r["run_id"]: r for r in read_json(old)["runs"]}
+        for r in results:
+            p = prev.get(r["run_id"])
+            if p is not None and (p["claim_position"], p["confirmed_parameters_removed"]) != (r["claim_position"], r["confirmed_parameters_removed"]):
+                raise SystemExit(f"{r['run_id']}: the re-confirmed primary claim ({r['claim_position']}) differs from the "
+                                 f"recorded one ({p['claim_position']}); nothing written")
+        sup = bdir / "superseded"
+        sup.mkdir(exist_ok=True)
+        for f in [old, bdir / "report.json", bdir / "report.md", *bdir.glob("*.confirm.json")]:
+            if f.exists():
+                f.replace(sup / f.name)
+    for r in results:
+        npz, arr = outcomes[r["run_id"]]
+        tmp = npz.with_name(npz.stem + ".tmp.npz")
+        np.savez_compressed(tmp, **arr)
+        tmp.replace(npz)
+        r["outcomes_file"], r["outcomes_sha256"] = npz.name, sha256_file(npz)
+        atomic_write_json(bdir / f"{r['run_id']}.confirm.json", r)
+    S = {"batch": batch, "amendment": 3, "runs": results, "confirmation_items": len(rows),
+         "per_category": {c: sum(1 for r in rows if r[field] == c) for c in CATS},
+         "cost": cost, "wall_seconds": time.time() - t_start, "alpha": alpha, "tolerance": tol, "commit": _git("rev-parse", "HEAD"),
          "clean_tree": _git("status", "--porcelain") == "", "finished_at": time.time()}
-    atomic_write_json(out / "batches" / batch / "confirm.json", S)
-    return out / "batches" / batch / "confirm.json"
+    atomic_write_json(bdir / "confirm.json", S)
+    return bdir / "confirm.json"
+
+
+# ============================================================================ amendment 3: S1-S4 (pure, CPU-tested)
+def counts_from_outcomes(dense: np.ndarray, cand: np.ndarray, cats: np.ndarray, idx=None) -> dict[str, tuple[int, int, int]]:
+    """Per-category (n, lost, gained) from per-item correctness vectors aligned with ``cats``; ``idx`` restricts the
+    count to a subsample (item indices)."""
+    if idx is not None:
+        dense, cand, cats = dense[idx], cand[idx], cats[idx]
+    out = {}
+    for c in CATS:
+        m = cats == c
+        d, t = dense[m], cand[m]
+        out[c] = (int(m.sum()), int(np.count_nonzero(d & ~t)), int(np.count_nonzero(t & ~d)))
+    return out
+
+
+def load_outcomes(path: Path) -> dict[str, np.ndarray]:
+    with np.load(path, allow_pickle=False) as z:
+        return {k: z[k] for k in z.files}
+
+
+def sequence_claim(oc: dict, alpha: float, tol: float, idx=None) -> tuple[int | None, int]:
+    """The fixed-sequence claim over a run's frozen order, from its stored outcomes (``oc``, the arrays of
+    ``<run>.outcomes.npz``), optionally on a subsample ``idx``: (the claimed position or None, its materialised
+    parameters removed or 0). Each checkpoint is decided by ``screen_confirm.iut_test``, exactly as in the primary
+    procedure, and the sequence stops at the first failure."""
+    from .screen_confirm import iut_test
+
+    claim = None
+    for i in range(len(oc["position"])):
+        if not iut_test(counts_from_outcomes(oc["dense"][i], oc["cand"][i], oc["category"], idx), alpha, tol)["pass"]:
+            break
+        claim = i
+    if claim is None:
+        return None, 0
+    return int(oc["position"][claim]), int(oc["materialized_parameters_removed"][claim])
+
+
+def s4_draws(qids, cats, sizes, draws: int, seed: int) -> dict[int, list[np.ndarray]]:
+    """S4's subsamples (plan amendment 3): draw d of size n takes, per category, n items without replacement from the
+    category's items sorted by qid, with ``default_rng([seed, n, d, crc32(category)])``. Returns item indices."""
+    qids, cats = np.asarray(qids), np.asarray(cats)
+    by_cat = {}
+    for c in CATS:
+        ix = np.flatnonzero(cats == c)
+        by_cat[c] = ix[np.argsort(qids[ix], kind="stable")]
+    out = {}
+    for n in sizes:
+        lst = []
+        for d in range(int(draws)):
+            parts = []
+            for c in CATS:
+                if int(n) > len(by_cat[c]):
+                    raise ValueError(f"S4: {n} items per category requested, {c} has {len(by_cat[c])}")
+                rng = np.random.default_rng([int(seed), int(n), int(d), zlib.crc32(c.encode())])
+                parts.append(np.sort(rng.choice(by_cat[c], size=int(n), replace=False)))
+            lst.append(np.concatenate(parts))
+        out[int(n)] = lst
+    return out
+
+
+def summarize(vals) -> dict:
+    """Median and interquartile range (25th-75th percentile, linear interpolation)."""
+    v = np.asarray(list(vals), dtype=float)
+    if not len(v):
+        return {"n": 0, "median": None, "q25": None, "q75": None}
+    return {"n": int(len(v)), "median": float(np.median(v)), "q25": float(np.percentile(v, 25)),
+            "q75": float(np.percentile(v, 75))}
+
+
+def s4_run(oc: dict, draws_idx: dict[int, list[np.ndarray]], alpha: float, tol: float) -> dict:
+    """S4 for one run: the 3-point procedure on every subsample draw, plus the full set (one distinct draw)."""
+    res = {}
+    for n, lst in draws_idx.items():
+        vals = [sequence_claim(oc, alpha, tol, idx)[1] for idx in lst]
+        res[str(n)] = {**summarize(vals), "values": vals}
+    full = sequence_claim(oc, alpha, tol)[1]
+    res["full"] = {**summarize([full]), "values": [full]}
+    return res
+
+
+def run_secondary(conf_run: dict, oc: dict, alpha: float, tol: float, s3_tol: float, draws_idx) -> dict:
+    """S1, S3 and S4 of one run (S2 needs the model's confirmation rate: ``study``)."""
+    pos, params = sequence_claim(oc, alpha, tol)
+    if (pos, params) != (conf_run["claim_position"], conf_run["confirmed_parameters_removed"]):
+        raise RuntimeError(f"{conf_run['run_id']}: the stored outcomes do not reproduce the primary claim")
+    sf = conf_run.get("screened_final") or {}
+    screened = int(sf.get("materialized_parameters_removed", 0))
+    s3_pos, s3 = sequence_claim(oc, alpha, s3_tol)
+    return {"S1": {"screened_final_parameters_removed": screened, "confirmed_parameters_removed": params,
+                   "overshoot_parameters": screened - params},
+            "S3": {"tolerance": s3_tol, "claim_position": s3_pos, "parameters_removed": s3},
+            "S4": s4_run(oc, draws_idx, alpha, tol)}
+
+
+def _secondary_cfg(cfg: dict) -> dict:
+    s = _c(cfg).get("secondary") or {}
+    return {"s3_tolerance": float(s.get("s3_tolerance", 0.05)), "s4_sizes": [int(n) for n in s.get("s4_sizes", [500, 1000, 2000])],
+            "s4_draws": int(s.get("s4_draws", 50)), "s4_seed": int(s.get("s4_seed", 20261124)),
+            "post_hoc_batches": list(s.get("post_hoc_batches", ["pilot"])),
+            "c1_bootstrap": {"resamples": int((s.get("c1_bootstrap") or {}).get("resamples", 10000)),
+                             "seed": int((s.get("c1_bootstrap") or {}).get("seed", 0))}}
+
+
+def _wall_seconds(runs_root: Path, rid: str, rd: Path) -> dict:
+    """Wall time of a run: from the supervisor's first launch of it to its "done" (model loading and any restart
+    included), from ``runs/_matrix/supervisor.log``; the journal's first start to its last record as a fallback."""
+    import datetime as _dt
+
+    first = done = None
+    log_p = runs_root / "_matrix" / "supervisor.log"
+    if log_p.exists():
+        for line in log_p.read_text(encoding="utf-8", errors="replace").split("\n"):
+            m = re.match(r"(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d),(\d+) .*\| " + re.escape(rid) + r": (starting attempt|done)", line)
+            if not m:
+                continue
+            ts = _dt.datetime.strptime(m.group(1), "%Y-%m-%d %H:%M:%S").timestamp() + int(m.group(2)) / 1000
+            if m.group(3) == "done":
+                done = ts
+            elif first is None:
+                first = ts
+    J = [json.loads(x) for x in (rd / "journal.jsonl").read_text(encoding="utf-8").split("\n") if x.strip()]
+    starts = [r for r in J if r.get("type") == "start"]
+    if first is not None and done is not None:
+        return {"seconds": done - first, "source": "supervisor", "attempts": len(starts)}
+    return {"seconds": max(r["ts"] for r in J) - starts[0]["ts"], "source": "journal", "attempts": len(starts)}
 
 
 # ============================================================================ report
@@ -583,11 +742,25 @@ def report(cfg: dict, batch: str) -> Path:
     conf = read_json(bdir / "confirm.json")
     adm = read_json(out / "admissibility.json") if (out / "admissibility.json").exists() else None
     q_plan = reg["power"]["planning_rates"]
+    sec = _secondary_cfg(cfg)
+    a3 = conf.get("amendment") == 3
+    draws_idx = None
     rows = []
     for r in conf["runs"]:
         o = read_json(bdir / f"{r['run_id']}.order.json")
         rd = Path(o["run_dir"])
         J = _journal(rd)
+        secondary = None
+        if a3:
+            npz = bdir / r["outcomes_file"]
+            if sha256_file(npz) != r["outcomes_sha256"]:
+                raise SystemExit(f"{npz} changed after confirmation")
+            oc = load_outcomes(npz)
+            if draws_idx is None:
+                draws_idx = s4_draws(oc["qids"], oc["category"], sec["s4_sizes"], sec["s4_draws"], sec["s4_seed"])
+            secondary = {**run_secondary(r, oc, conf["alpha"], conf["tolerance"], sec["s3_tolerance"], draws_idx),
+                         "label": "added after the pilot" + (" (post hoc for this batch)" if batch in sec["post_hoc_batches"] else "")}
+        scored = r["tested"] + r.get("scored_after_failure", [])
         tim = {k: sum((a.get("timings") or {}).get(k, 0.0) for a in J.values()) for k in
                ("profile_s", "build_s", "gate_s", "gate_trial_scoring_s", "gate_dense_reference_s", "kl_probe_s", "counterfactual_s",
                 "rollback_s", "attempt_s")}
@@ -609,6 +782,10 @@ def report(cfg: dict, batch: str) -> Path:
                      "tested": [{k: x[k] for k in ("position", "params_removed", "pass", "upper", "upper_bonferroni_descriptive",
                                                    "estimate", "pool_loss", "counts")} for x in r["tested"]],
                      "final_descriptive": r["final_descriptive"], "power_achieved": pw,
+                     "scored": [{k: x.get(k) for k in ("position", "params_removed", "materialized_parameters_removed", "pass",
+                                                       "upper", "estimate", "pool_loss", "counts")} for x in scored],
+                     "n_tested": len(r["tested"]), "dense_parameters": r.get("dense_parameters"),
+                     "wall": _wall_seconds(rd.parent, r["run_id"], rd), "secondary": secondary,
                      "cost": {"screening_gate_questions": o["cost"]["gate_questions"],
                               "questions_charged_to_cap": o["cost"]["questions_charged"],
                               "kl_probe_items": (o["cost"].get("kl_probe") or {}).get("paired_items_charged", 0),
@@ -617,6 +794,7 @@ def report(cfg: dict, batch: str) -> Path:
                      "counterfactual_logs": cf_logs})
     S = {"batch": batch, "model_key": C["model_key"], "admissibility": adm, "registration_sha256": sha256_file(out / "registration.json"),
          "confirmation": {"items": conf["confirmation_items"], "per_category": conf["per_category"], "cost": conf["cost"]},
+         "amendment": conf.get("amendment"), "secondary_config": sec,
          "planning_rates": q_plan, "runs": rows, "commit": _git("rev-parse", "HEAD")}
     atomic_write_json(bdir / "report.json", S)
     atomic_write_text(bdir / "report.md", render_report(S))
@@ -649,11 +827,24 @@ def render_report(S: dict) -> str:
             L.append(f"| {x['position']} | {x['params_removed']:,} | {x['pass']} | " + " | ".join(
                 f"{pt(x['estimate'][c])} / {pt(x['upper'][c])} / {pt(x['upper_bonferroni_descriptive'][c])} / "
                 f"{pt((x['pool_loss'] or {}).get(c))}" for c in CATS) + " |")
-        if r["final_descriptive"]:
+        if r.get("secondary") is not None:  # amendment 3: every checkpoint after the first failure, descriptive
+            for x in r["scored"][r["n_tested"]:]:
+                L.append(f"| {x['position']} (descriptive, A3) | {x['params_removed']:,} | ({x['pass']}) | " + " | ".join(
+                    f"{pt(x['estimate'][c])} / {pt(x['upper'][c])} / – / {pt((x['pool_loss'] or {}).get(c))}" for c in CATS) + " |")
+        elif r["final_descriptive"]:
             f = r["final_descriptive"]
             L.append(f"| final {f['position']} (descriptive) | {f['params_removed']:,} | ({f['pass']}) | " + " | ".join(
                 f"{pt(f['estimate'][c])} / {pt(f['upper'][c])} / {pt(f['upper_bonferroni_descriptive'][c])} / "
                 f"{pt((f['pool_loss'] or {}).get(c))}" for c in CATS) + " |")
+        sc = r.get("secondary")
+        if sc:
+            s4 = "; ".join(f"{n}: median {sc['S4'][n]['median'] / 1e6:.1f} M [IQR {sc['S4'][n]['q25'] / 1e6:.1f}–{sc['S4'][n]['q75'] / 1e6:.1f}]"
+                           for n in sorted(sc["S4"], key=lambda n: (n == "full", int(n) if n != "full" else 0)))
+            L += ["", f"Secondary endpoints, {sc['label']}: S1 overshoot {sc['S1']['overshoot_parameters']:,} parameters "
+                  f"(screened final {sc['S1']['screened_final_parameters_removed']:,}); S3 at {100 * sc['S3']['tolerance']:.0f} "
+                  f"points: position {sc['S3']['claim_position'] or 'none'}, {sc['S3']['parameters_removed']:,} parameters; "
+                  f"S4 (3 points; per-category subsample size): {s4}."]
+        L.append(f"Wall time: {r['wall']['seconds'] / 60:.1f} min ({r['wall']['attempts']} attempt(s), from the {r['wall']['source']}).")
         pw = r["power_achieved"]
         if pw:
             L.append("")
