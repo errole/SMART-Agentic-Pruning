@@ -3,6 +3,9 @@
 Committed and pushed **before any confirmatory model is scored on any item**. Any change before the full matrix needs
 a dated amendment in this file, committed before any further confirmation scoring.
 
+**Amendments to this plan:** amendment 3 (2026-11-24, after the pilot): every frozen checkpoint is scored, and
+secondary endpoints S1–S4 are added (§10). Amendments 1 and 2 are the protocol's.
+
 **Development model.** Qwen3-1.7B is the development model. None of its results count as confirmatory.
 
 **Protocol in force.** [`screen_confirm_protocol.md`](screen_confirm_protocol.md) with amendments 1 and 2. Claims:
@@ -184,6 +187,7 @@ Each model has 3 arms × seeds 0, 1, 2, all with the gradient ranker.
   * **Stop and claim:** stop at the first failure; the run's claim is the last passing checkpoint (none if the first
     fails).
   * **Scoring order:** the sequence is evaluated lazily, so checkpoints after a failure are never scored as tests.
+    (Amendment 3, §10: every checkpoint is now scored, but only for secondary endpoints; the decision is unchanged.)
 * **Description only.**
   * Simultaneous Bonferroni bounds for every tested checkpoint.
   * The run's final screened checkpoint, scored once if the sequence did not reach it, and labelled as not part of
@@ -274,3 +278,125 @@ checkpoint, as a fraction of the dense model; 0 if nothing is certified.
 * The planning rates come from Qwen3-1.7B. The actual power depends on each checkpoint's disagreement rate.
 * The confirmation set is reused across a model's runs and arms. Each claim is per run.
 * Social Sciences has the smallest gate pool (954 items), so its gate decisions use the whole pool more often.
+
+## 10. Amendment 3 (2026-11-24): every frozen checkpoint scored; secondary endpoints S1–S4 added after the pilot
+
+Committed and pushed **before any further scoring.** Since the pilot, no item has been scored: no screening of model 1
+seeds 1 and 2 or of model 2, and no confirmation scoring.
+
+**Reason.** The pilot (model 1, seed 0; [`confirmatory_pilot_report.md`](confirmatory_pilot_report.md)) showed that
+the primary endpoint cannot separate the arms when confirmation fails before they diverge.
+* The arms' trajectories are identical until a screen first rejects (step 7 in the pilot).
+* Confirmation failed at checkpoint 4, so all three arms confirmed the same 56.6 M parameters.
+
+The secondary endpoints below describe how the arms differ in that case.
+
+**Not changed:** the primary endpoint and its analysis (§5, §6); the models (§1); both models' sealed data splits and
+registrations (§2); the arms, step, caps and stop rules (§3); the confirmation rule (§4: Clopper–Pearson union bound,
+per-category IUT at α = 0.05 against 3 points, fixed sequence over the frozen order, stop at the first failure); the
+batches; the C1–C6 criteria (§6).
+
+### A3.1 Every frozen checkpoint is scored
+
+* `confirm` scores **every** checkpoint of each run's frozen order, in that order, on the full confirmation set, with
+  the same materialization, identical batches and score cache as §4.
+* **The primary decision does not change.** It is `fixed_sequence` at 3 points over the frozen order, stopping at the
+  first failure. The scores of checkpoints after the first failure never enter it.
+* Those later scores serve only the secondary endpoints S1–S4 and description. They replace §4's single descriptive
+  score of the final checkpoint.
+* Each checkpoint's per-item outcomes (dense and checkpoint correctness on every confirmation item) are stored with the
+  run's confirmation record. S3 and S4 are computed from exactly these scores.
+
+### A3.2 Secondary endpoints S1–S4 (added after the pilot)
+
+Wherever they are reported, they are labelled **"added after the pilot"**.
+* **Reporting:** per run, and per arm within each model: the mean and range over seeds, with the seed as the unit, and
+  the per-seed paired differences (b) − (a) and (c) − (b).
+* **Two versions of each:** (i) all seeds, and (ii) excluding model 1 seed 0 (the pilot).
+* **Status:** descriptive. No test and no support criterion.
+
+**S1, screening overshoot.**
+* The parameters removed at the screen's final checkpoint (the last position of the frozen order), minus the confirmed
+  parameters removed (the primary endpoint).
+* Both are materialized parameter counts. Reported in parameters and as a fraction of the dense model.
+* 0 for a run with no accepted checkpoint.
+
+**S2, evaluation cost per confirmed parameter.** The numerator is screening + KL probe + confirmation. The
+counterfactual log is reported separately and is not included; profiling appears under wall time and is not included.
+Two units, both pre-specified:
+* **Items:** the questions charged to the cap (gate questions + KL-probe items), plus the confirmation items that the
+  primary procedure needs.
+  * Confirmation items = the set size (13,100) × (1 dense reference + the checkpoints the fixed sequence tested, up to
+    and including the first failure, or all of them if none fails).
+  * Arm (a)'s screen scores no benchmark items, so its screening cost in items is 0. Its perplexity evaluations appear
+    in GPU seconds.
+* **GPU seconds:** gate seconds (the journal's `gate_s`: the trial and dense-reference scoring, or arm (a)'s
+  perplexity evaluation), plus KL-probe seconds, plus confirmation seconds.
+  * Confirmation scores are shared between runs and cached. A run's confirmation seconds are therefore its confirmation
+    items × the model's measured seconds per confirmation item.
+  * That rate is measured over the model's confirmation passes, excluding items replayed from the cache and the pilot's
+    first (spilled) pass.
+* **The denominator:** confirmed parameters removed, in millions.
+* **When nothing is confirmed,** S2 is undefined. Those runs are reported as "none confirmed" and counted, not
+  averaged.
+
+**S3, confirmed compression at a 5-point limit.**
+* The same procedure (Clopper–Pearson union bound, per-category IUT at α = 0.05, fixed sequence over the same frozen
+  order, stop at the first failure) with a 0.05 tolerance instead of 0.03, on the same scores.
+* The result is the materialized parameters removed of its claim; 0 if the first checkpoint fails.
+* Not a claim of the study.
+
+**S4, certifiable compression vs confirmation sample size.**
+* **Sizes:** 500, 1,000 and 2,000 items per category, and the full set (3,600 / 3,000 / 3,000 / 3,500).
+* **Draws:** 50 per size.
+  * Draw d of size n takes, in each category, a uniformly random subset of n items without replacement, from the
+    category's items sorted by qid.
+  * The generator is `numpy.random.default_rng([20261124, n, d, crc32(category)])`.
+  * Each model has one set of draws, shared by all its runs and checkpoints (paired).
+  * All 50 draws of the full set are the full set, so that size has one value, equal to the primary endpoint.
+* **Per draw:** the 3-point procedure of the primary endpoint, applied to the subsample's counts over the frozen order;
+  the result is the claim's parameters removed.
+* **Reported:** per run, the median and interquartile range (25th–75th percentile, linear interpolation) over the 50
+  draws; per arm and model, the median and IQR over all draws of its seeds.
+* **Status:** descriptive.
+
+### A3.3 Data splits and C1
+
+* Both models' sealed splits are kept as registered.
+* Under C1, the report gives each model's Social Sciences gate-pool size (954 items in both) and its
+  pool-vs-confirmation gap at every tested checkpoint, next to the other categories' gaps.
+* **C1's bootstrap interval** (§6 left the details open; fixed here, before the data): percentile interval,
+  10,000 resamples of the checkpoints, `numpy.random.default_rng(0)`. The checkpoints are the tested checkpoints of
+  arms (b) and (c), counted per run as §6 states, so a checkpoint that both arms share is counted once in each run.
+
+### A3.4 The pilot
+
+* S1–S4 are also computed for the pilot runs (model 1, seed 0) from their frozen orders. **They are labelled post
+  hoc.**
+* The pilot's already-scored checkpoints are replayed from the score cache. `confirm` refuses if a rerun's primary
+  claim differs from the recorded one.
+* The pilot's earlier records are kept, moved to `batches/pilot/superseded/`.
+* Under §7.4, the pilot remains confirmatory data. Amendment 3 changes neither how the pilot was screened nor its
+  primary confirmation.
+
+### A3.5 Order of work
+
+* **Screening order:** model 1's seeds 1 and 2 (all three arms; batch `main` of model 1) are screened first, then
+  model 2's seeds 0–2 (all three arms; batch `main` of model 2).
+* **Per batch:** each batch is frozen after its runs end, and confirmed only after freezing. The pilot batch is
+  re-confirmed for S1–S4.
+* **Hardware:** every run uses the same RTX 5090, with no other GPU job running. Screening and confirmation never run
+  at the same time.
+
+### A3.6 The report
+
+The report leads with the primary endpoint per arm (paired across seeds within each model, the seed as the unit). It
+then gives:
+* C1, per category;
+* C4: arm (a)'s per-category loss at its screened endpoint, descriptive, together with the §6 criterion;
+* C6: KL vs gradient rank 2 over all rejections, sign test; TV and S1c vs KL as secondary;
+* S1–S4;
+* wall time and cost per run;
+* every deviation from this plan.
+
+The study summary is produced by `capprune confirmatory study`.
