@@ -48,7 +48,8 @@ def _save(fig, out: Path, name: str) -> list[str]:
     paths = []
     for ext in ("png", "pdf"):
         p = out / "figures" / f"{name}.{ext}"
-        fig.savefig(p, dpi=220, bbox_inches="tight")
+        meta = {"CreationDate": None} if ext == "pdf" else {}  # no timestamp: regeneration is byte-reproducible
+        fig.savefig(p, dpi=220, bbox_inches="tight", metadata=meta)
         paths.append(str(p))
     return paths
 
