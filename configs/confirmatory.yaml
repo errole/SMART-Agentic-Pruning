@@ -9,6 +9,7 @@
 #   python -m capprune confirmatory freeze        --config ... --batch pilot
 #   python -m capprune confirmatory confirm       --config ... --batch pilot
 #   python -m capprune confirmatory report        --config ... --batch pilot
+#   python -m capprune confirmatory study         --config configs/confirmatory.yaml       # both models (amendment 3)
 extends: gradient_live.yaml
 
 data:
@@ -80,6 +81,19 @@ confirmatory:
   batches:
     pilot: [[ppl_top1, 0], [cap_top1, 0], [cap_klprobe, 0]]
     main: [[ppl_top1, 1], [cap_top1, 1], [cap_klprobe, 1], [ppl_top1, 2], [cap_top1, 2], [cap_klprobe, 2]]
+  secondary:                       # amendment 3 (plan section 10): S1-S4, added after the pilot
+    s3_tolerance: 0.05             # S3: confirmed compression at a 5-point limit, same procedure
+    s4_sizes: [500, 1000, 2000]    # S4: items per category per subsample (+ the full set)
+    s4_draws: 50
+    s4_seed: 20261124              # draw d of size n: default_rng([s4_seed, n, d, crc32(category)])
+    post_hoc_batches: [pilot]      # S1-S4 of these batches are labelled post hoc
+    c1_bootstrap: {resamples: 10000, seed: 0}
+  study:                           # capprune confirmatory study --config configs/confirmatory.yaml
+    out_dir: ~/cap-prune-runs/confirmatory/study
+    models:
+      - {label: model 1, out_dir: ~/cap-prune-runs/confirmatory/smollm3-3b, batches: [pilot, main]}
+      - {label: model 2, out_dir: ~/cap-prune-runs/confirmatory/granite-3.3-2b, batches: [main]}
+    sensitivity_exclude: {model_key: smollm3-3b, seed: 0, label: model 1 seed 0}
   sources:
     mmlu_prepared_dir: ~/cap-prune-runs/data       # identical to cais/mmlu @ c30699e8 (test, validation, dev; checked)
     mmlu_dataset: {repo: cais/mmlu, revision: c30699e8356da336a370243923dbaf21066bb9fe}

@@ -1,6 +1,6 @@
 # CAP-Prune results index
 
-Generated 2026-11-24 02:20:27 from `C:\Users\elbas\cap-prune-runs`. Code: commit `fbb65f148b39373e5f65339e72eb80c3cada0c81` on `research/confirmatory-study` (working tree clean: True). Environment: {'python': '3.12.10', 'platform': 'Windows-11-10.0.26300-SP0', 'torch': '2.11.0+cu128', 'cuda': '12.8', 'gpu': 'NVIDIA GeForce RTX 5090', 'transformers': '5.23.0'}.
+Generated 2026-11-25 09:04:07 from `C:\Users\elbas\cap-prune-runs`. Code: commit `6d0ad911611e465ff36359c13b0b78f7f91098c3` on `research/confirmatory-matrix` (working tree clean: True). Environment: {'python': '3.12.10', 'platform': 'Windows-11-10.0.26300-SP0', 'torch': '2.11.0+cu128', 'cuda': '12.8', 'gpu': 'NVIDIA GeForce RTX 5090', 'transformers': '5.23.0'}.
 
 Code provenance: results produced before the first research commit came from uncommitted code; for runs with a `registration.json` the SHA-256 (16 hex) of the key source files at registration is listed with the files that have changed since. Headline numbers are copied from each experiment's own JSON outputs.
 
@@ -24,8 +24,9 @@ Code provenance: results produced before the first research commit came from unc
 | **screen-confirm**: Screen-then-confirm protocol (v1 + amendment 1: IUT, fixed sequence): confirmation sample sizes (no confirmation run yet) | protocol (committed before any new scoring); sample-size planning only | `configs/screen_confirm.yaml` f2d560ef47d8<br>`configs/screen_confirm_v2.yaml` bd9649ce183c<br>`docs/screen_confirm_protocol.md` 8783a0146b09 | `C:\Users\elbas\cap-prune-runs\screen-confirm\confirmation_sizes.md`<br>`C:\Users\elbas\cap-prune-runs\screen-confirm\confirmation_sizes_v2.md` | not registered (pre-commit code) |
 | **matched-signals**: Matched-compression signal test: KL vs. net flip as choice signals among equal-size actions (3 stall parents x 11) | exploratory (pre-registered plan and split; gate-pool items only, no audit sets) | `configs/matched_signals.yaml` 261e54f5264d<br>`docs/matched_signal_plan.md` da6fec8149ce | `C:\Users\elbas\cap-prune-runs\matched-signals\report.md` | none |
 | **matched-signals-ordinary**: Matched-signal test on ordinary parents (ranker trajectories, 13 x 11) vs. the stall parents; policy recommendation | exploratory (pre-registered parent list, plan and split; parents as units; after-rejection and TV tables post hoc) | `configs/matched_signals_ordinary.yaml` 19c4335580a4<br>`docs/matched_signal_plan_ordinary.md` 8e71e1ad9887 | `C:\Users\elbas\cap-prune-runs\matched-signals-ordinary\comparison.md`<br>`C:\Users\elbas\cap-prune-runs\matched-signals-ordinary\report.md`<br>`C:\Users\elbas\cap-prune-runs\matched-signals-ordinary\after_rejection.md`<br>`C:\Users\elbas\cap-prune-runs\matched-signals-ordinary\tv_posthoc.md` | none |
-| **confirmatory-smollm3-3b**: Confirmatory study, model 1 SmolLM3-3B-Base (pilot = seed 0, arms a/b/c, through confirmation) | confirmatory (pre-registered plan v1, f0152c8); pilot batch only so far | `configs/confirmatory.yaml` 1bdde0f0bc37<br>`configs/confirmatory_smollm3.yaml` f80a5132a4e9<br>`docs/confirmatory_study_plan.md` 59976c589a48 | `C:\Users\elbas\cap-prune-runs\confirmatory\smollm3-3b\registration.md`<br>`C:\Users\elbas\cap-prune-runs\confirmatory\smollm3-3b\batches\pilot\report.md` | none |
-| **confirmatory-granite-3.3-2b**: Confirmatory study, model 2 Granite-3.3-2B-Base (sealed and admissible; not screened yet) | confirmatory (sealed; no runs yet) | `configs/confirmatory.yaml` 1bdde0f0bc37<br>`configs/confirmatory_granite.yaml` 85043e68b8cc<br>`docs/confirmatory_study_plan.md` 59976c589a48 | `C:\Users\elbas\cap-prune-runs\confirmatory\granite-3.3-2b\registration.md` | none |
+| **confirmatory-smollm3-3b**: Confirmatory study, model 1 SmolLM3-3B-Base (pilot = seed 0, main = seeds 1-2; arms a/b/c, every frozen checkpoint scored) | confirmatory (plan v1 f0152c8, amendments 1-3); S1-S4 added after the pilot (post hoc for the pilot) | `configs/confirmatory.yaml` 11370e65afbc<br>`configs/confirmatory_smollm3.yaml` 13383362f5f4<br>`docs/confirmatory_study_plan.md` 4ee22b1a3365 | `C:\Users\elbas\cap-prune-runs\confirmatory\smollm3-3b\registration.md`<br>`C:\Users\elbas\cap-prune-runs\confirmatory\smollm3-3b\batches\pilot\report.md`<br>`C:\Users\elbas\cap-prune-runs\confirmatory\smollm3-3b\batches\main\report.md` | none |
+| **confirmatory-granite-3.3-2b**: Confirmatory study, model 2 Granite-3.3-2B-Base (main = seeds 0-2; arms a/b/c, every frozen checkpoint scored) | confirmatory (plan v1 f0152c8, amendments 1-3); S1-S4 added after the pilot | `configs/confirmatory.yaml` 11370e65afbc<br>`configs/confirmatory_granite.yaml` 759e0816a1ab<br>`docs/confirmatory_study_plan.md` 4ee22b1a3365 | `C:\Users\elbas\cap-prune-runs\confirmatory\granite-3.3-2b\registration.md`<br>`C:\Users\elbas\cap-prune-runs\confirmatory\granite-3.3-2b\batches\main\report.md` | none |
+| **confirmatory-study**: Confirmatory study summary over both models: primary endpoint paired across seeds, C1, C4, C6, S1-S4, cost | confirmatory (primary, C1, C4, C6); S1-S4 secondary, added after the pilot | `configs/confirmatory.yaml` 11370e65afbc<br>`docs/confirmatory_study_plan.md` 4ee22b1a3365 | `C:\Users\elbas\cap-prune-runs\confirmatory\study\study.md` | not registered (pre-commit code) |
 | **kl-probe-smoke-qwen**: GPU smoke test of the amendment-2 proposer (KL probe after a rank-1 rejection, counterfactual log) on Qwen3-1.7B | smoke test (NOT a result; rank-1 reject forced by the test hook) | `configs/kl_probe_smoke_qwen.yaml` 0fa7d12e5b0d | - | not registered (pre-commit code) |
 | **unstructured**: Unstructured-mode CAP-Prune matrix (started, never progressed past setup) | incomplete | `configs/base.yaml` ef931627011e | - | not registered (pre-commit code) |
 
@@ -152,14 +153,38 @@ Folder `matched-signals-ordinary` (present); docs `docs/matched_signals_ordinary
 * n=300: where the gate accepted rank 1 (12 parents) KL beats/matches/worse 5/0/7, mean KL - rank 1 +0.07 pts (sign p 0.77)
 * n=400: where the gate accepted rank 1 (12 parents) KL beats/matches/worse 5/0/7, mean KL - rank 1 +0.10 pts (sign p 0.77)
 
-### confirmatory-smollm3-3b: Confirmatory study, model 1 SmolLM3-3B-Base (pilot = seed 0, arms a/b/c, through confirmation)
-Folder `confirmatory/smollm3-3b` (present); docs `docs/confirmatory_pilot_report.md`; runs: none.
-* smollm3-3b pilot ppl_top1__t00__s0: confirmed 56,623,104 params (1.84 %), checkpoint 3; screened final 566,231,040; stop proposal_cap
-* smollm3-3b pilot cap_top1__t00__s0: confirmed 56,623,104 params (1.84 %), checkpoint 3; screened final 113,246,208; stop candidate_rejected
-* smollm3-3b pilot cap_klprobe__t00__s0: confirmed 56,623,104 params (1.84 %), checkpoint 3; screened final 169,869,312; stop fallback_exhausted
+### confirmatory-smollm3-3b: Confirmatory study, model 1 SmolLM3-3B-Base (pilot = seed 0, main = seeds 1-2; arms a/b/c, every frozen checkpoint scored)
+Folder `confirmatory/smollm3-3b` (present); docs `docs/confirmatory_report.md`; runs: none.
+* smollm3-3b main ppl_top1__t00__s1: confirmed 37,748,736 params (1.23 %), checkpoint 2; screened final 566,231,040; stop proposal_cap; S1 overshoot 528,482,304; S3 (5 pts) 56,623,104 [added after the pilot]
+* smollm3-3b main cap_top1__t00__s1: confirmed 37,748,736 params (1.23 %), checkpoint 2; screened final 94,371,840; stop candidate_rejected; S1 overshoot 56,623,104; S3 (5 pts) 56,623,104 [added after the pilot]
+* smollm3-3b main cap_klprobe__t00__s1: confirmed 37,748,736 params (1.23 %), checkpoint 2; screened final 113,246,208; stop fallback_exhausted; S1 overshoot 75,497,472; S3 (5 pts) 56,623,104 [added after the pilot]
+* smollm3-3b main ppl_top1__t00__s2: confirmed 75,497,472 params (2.46 %), checkpoint 4; screened final 566,231,040; stop proposal_cap; S1 overshoot 490,733,568; S3 (5 pts) 94,371,840 [added after the pilot]
+* smollm3-3b main cap_top1__t00__s2: confirmed 75,497,472 params (2.46 %), checkpoint 4; screened final 94,371,840; stop candidate_rejected; S1 overshoot 18,874,368; S3 (5 pts) 94,371,840 [added after the pilot]
+* smollm3-3b main cap_klprobe__t00__s2: confirmed 75,497,472 params (2.46 %), checkpoint 4; screened final 150,994,944; stop fallback_exhausted; S1 overshoot 75,497,472; S3 (5 pts) 113,246,208 [added after the pilot]
+* smollm3-3b pilot ppl_top1__t00__s0: confirmed 56,623,104 params (1.84 %), checkpoint 3; screened final 566,231,040; stop proposal_cap; S1 overshoot 509,607,936; S3 (5 pts) 94,371,840 [added after the pilot (post hoc for this batch)]
+* smollm3-3b pilot cap_top1__t00__s0: confirmed 56,623,104 params (1.84 %), checkpoint 3; screened final 113,246,208; stop candidate_rejected; S1 overshoot 56,623,104; S3 (5 pts) 94,371,840 [added after the pilot (post hoc for this batch)]
+* smollm3-3b pilot cap_klprobe__t00__s0: confirmed 56,623,104 params (1.84 %), checkpoint 3; screened final 169,869,312; stop fallback_exhausted; S1 overshoot 113,246,208; S3 (5 pts) 94,371,840 [added after the pilot (post hoc for this batch)]
 
-### confirmatory-granite-3.3-2b: Confirmatory study, model 2 Granite-3.3-2B-Base (sealed and admissible; not screened yet)
-Folder `confirmatory/granite-3.3-2b` (present); docs `docs/confirmatory_study_plan.md`; runs: none.
+### confirmatory-granite-3.3-2b: Confirmatory study, model 2 Granite-3.3-2B-Base (main = seeds 0-2; arms a/b/c, every frozen checkpoint scored)
+Folder `confirmatory/granite-3.3-2b` (present); docs `docs/confirmatory_report.md`; runs: none.
+* granite-3.3-2b main ppl_top1__t00__s0: confirmed 47,185,920 params (1.86 %), checkpoint 3; screened final 471,859,200; stop proposal_cap; S1 overshoot 424,673,280; S3 (5 pts) 47,185,920 [added after the pilot]
+* granite-3.3-2b main cap_top1__t00__s0: confirmed 47,185,920 params (1.86 %), checkpoint 3; screened final 47,185,920; stop candidate_rejected; S1 overshoot 0; S3 (5 pts) 47,185,920 [added after the pilot]
+* granite-3.3-2b main cap_klprobe__t00__s0: confirmed 62,914,560 params (2.48 %), checkpoint 4; screened final 94,371,840; stop fallback_exhausted; S1 overshoot 31,457,280; S3 (5 pts) 78,643,200 [added after the pilot]
+* granite-3.3-2b main ppl_top1__t00__s1: confirmed 62,914,560 params (2.48 %), checkpoint 4; screened final 471,859,200; stop proposal_cap; S1 overshoot 408,944,640; S3 (5 pts) 62,914,560 [added after the pilot]
+* granite-3.3-2b main cap_top1__t00__s1: confirmed 62,914,560 params (2.48 %), checkpoint 4; screened final 62,914,560; stop candidate_rejected; S1 overshoot 0; S3 (5 pts) 62,914,560 [added after the pilot]
+* granite-3.3-2b main cap_klprobe__t00__s1: confirmed 78,643,200 params (3.10 %), checkpoint 5; screened final 125,829,120; stop fallback_exhausted; S1 overshoot 47,185,920; S3 (5 pts) 125,829,120 [added after the pilot]
+* granite-3.3-2b main ppl_top1__t00__s2: confirmed 47,185,920 params (1.86 %), checkpoint 3; screened final 471,859,200; stop proposal_cap; S1 overshoot 424,673,280; S3 (5 pts) 110,100,480 [added after the pilot]
+* granite-3.3-2b main cap_top1__t00__s2: confirmed 47,185,920 params (1.86 %), checkpoint 3; screened final 62,914,560; stop candidate_rejected; S1 overshoot 15,728,640; S3 (5 pts) 62,914,560 [added after the pilot]
+* granite-3.3-2b main cap_klprobe__t00__s2: confirmed 47,185,920 params (1.86 %), checkpoint 3; screened final 110,100,480; stop fallback_exhausted; S1 overshoot 62,914,560; S3 (5 pts) 110,100,480 [added after the pilot]
+
+### confirmatory-study: Confirmatory study summary over both models: primary endpoint paired across seeds, C1, C4, C6, S1-S4, cost
+Folder `confirmatory/study` (present); docs `docs/confirmatory_report.md`; runs: none.
+Provenance note: derived summary with no registration of its own: written by `capprune confirmatory study` at commit 21ab08d (clean tree; study.json records it) from the two registered model folders above
+* model 1 smollm3-3b: confirmed params removed, mean over seeds - ppl_top1 56,623,104, cap_top1 56,623,104, cap_klprobe 56,623,104; (b)-(a) same sign in every seed: False; (c)-(b): False
+* model 1 C1: mean worst-category gap +0.39 points, 95 % CI [+0.18, +0.59]; C1 criterion True; C4 criterion False
+* model 2 granite-3.3-2b: confirmed params removed, mean over seeds - ppl_top1 52,428,800, cap_top1 52,428,800, cap_klprobe 62,914,560; (b)-(a) same sign in every seed: False; (c)-(b): False
+* model 2 C1: mean worst-category gap -0.26 points, 95 % CI [-0.38, -0.12]; C1 criterion False; C4 criterion False
+* C6 KL vs rank 2: 11 better / 8 worse / 2 ties of 21, p = 0.648; criterion met False; C1 supported False; C4 supported False
 
 ### kl-probe-smoke-qwen: GPU smoke test of the amendment-2 proposer (KL probe after a rank-1 rejection, counterfactual log) on Qwen3-1.7B
 Folder `_smoke/kl-probe-qwen` (present); docs `docs/screen_confirm_protocol.md`; runs: gradient_top1__t00__s0 (science 293cb08bc808f2a1).
@@ -194,6 +219,7 @@ Folder `unstructured` (present); docs `README.md`; runs: cap_prune__t20__s0 (sci
 * `C:\Users\elbas\cap-prune-runs\_tests\2026-11-23_6bb49c4e18dc`: 114 passed in 834.59s (0:13:54) (commit `6bb49c4e18dc`)
 * `C:\Users\elbas\cap-prune-runs\_tests\2026-11-23_d3864f0d5e83`: 120 passed in 764.70s (0:12:44) (commit `d3864f0d5e83`)
 * `C:\Users\elbas\cap-prune-runs\_tests\2026-11-23_earlier-session`: see folder (commit `n/a`)
+* `C:\Users\elbas\cap-prune-runs\_tests\2026-11-24_21ab08de3818`: 154 passed in 939.68s (0:15:39) (commit `21ab08de3818`)
 * `C:\Users\elbas\cap-prune-runs\_tests\2026-11-24_fbb65f148b39`: 147 passed in 863.59s (0:14:23) (commit `fbb65f148b39`)
 
 ## Backups (verified copies of the runs root)
@@ -203,3 +229,4 @@ Folder `unstructured` (present); docs `README.md`; runs: cap_prune__t20__s0 (sci
 * 2026-11-23_185601: `cap-prune-runs_2026-11-23_185601_7ba4d2cd25f6.zip` (135 MB, 5437 files, sha256 `a08ed0642b2f8652...`) -> `E:\cap-prune-backups\cap-prune-runs_2026-11-23_185601_7ba4d2cd25f6.zip` verified=True; `C:\Users\elbas\OneDrive\Documents\Education\NYU Tandon - GY\Efficient AI Computing Algorithm and Implementation\project\CAP-Prune-backups\cap-prune-runs_2026-11-23_185601_7ba4d2cd25f6.zip` verified=True
 * 2026-11-23_211610: `cap-prune-runs_2026-11-23_211610_b51875043128.zip` (180 MB, 6974 files, sha256 `33f7ac526ef29aff...`) -> `E:\cap-prune-backups\cap-prune-runs_2026-11-23_211610_b51875043128.zip` verified=True; `C:\Users\elbas\OneDrive\Documents\Education\NYU Tandon - GY\Efficient AI Computing Algorithm and Implementation\project\CAP-Prune-backups\cap-prune-runs_2026-11-23_211610_b51875043128.zip` verified=True
 * 2026-11-23_221838: `cap-prune-runs_2026-11-23_221838_b97fbb89e772.zip` (187 MB, 8687 files, sha256 `689985a3fa25dd8d...`) -> `E:\cap-prune-backups\cap-prune-runs_2026-11-23_221838_b97fbb89e772.zip` verified=True; `C:\Users\elbas\OneDrive\Documents\Education\NYU Tandon - GY\Efficient AI Computing Algorithm and Implementation\project\CAP-Prune-backups\cap-prune-runs_2026-11-23_221838_b97fbb89e772.zip` verified=True
+* 2026-11-24_022031: `cap-prune-runs_2026-11-24_022031_2a8f20ddddc2.zip` (284 MB, 10692 files, sha256 `6a74e6a48b84ee9d...`) -> `E:\cap-prune-backups\cap-prune-runs_2026-11-24_022031_2a8f20ddddc2.zip` verified=True; `C:\Users\elbas\OneDrive\Documents\Education\NYU Tandon - GY\Efficient AI Computing Algorithm and Implementation\project\CAP-Prune-backups\cap-prune-runs_2026-11-24_022031_2a8f20ddddc2.zip` verified=True

@@ -28,7 +28,7 @@
   pool-signals      4-letter log-probabilities on the gate pool and continuous paired signals: score | analyze
   screen-confirm    screen-then-confirm protocol: confirmation sample sizes per category: sizes
   confirmatory      the pre-registered confirmatory study: build-data (seal) | admissibility | freeze | confirm |
-                    report
+                    report | study (both models: primary, C1, C4, C6, S1-S4)
   matched-signals   equal-size actions of stall / ranker parents: KL vs. net flip as choice signals: register | score | analyze |
                     compare | after-rejection, tv-posthoc (post hoc)
   results-index     one index of every experiment: configs, code hashes, commit, reports, headline numbers
@@ -391,6 +391,12 @@ def cmd_pool_signals(args) -> int:
     return 0
 
 
+def _study(cfg):
+    from .confirmatory_study import study
+
+    return study(cfg)
+
+
 def cmd_confirmatory(args) -> int:
     from . import confirmatory as cf
     from .utils.log import setup_logging
@@ -401,7 +407,7 @@ def cmd_confirmatory(args) -> int:
         raise SystemExit(f"confirmatory {args.phase} needs --batch")
     fn = {"build-data": lambda: cf.build_data(cfg), "admissibility": lambda: cf.admissibility(cfg),
           "freeze": lambda: cf.freeze(cfg, args.batch), "confirm": lambda: cf.confirm(cfg, args.batch),
-          "report": lambda: cf.report(cfg, args.batch)}[args.phase]
+          "report": lambda: cf.report(cfg, args.batch), "study": lambda: _study(cfg)}[args.phase]
     p = fn()
     if p.suffix == ".md":
         print(p.read_text(encoding="utf-8"))
@@ -527,7 +533,7 @@ def main(argv=None) -> int:
     p.add_argument("phase", choices=["sizes"])
     p.set_defaults(fn=cmd_screen_confirm)
     p = sub.add_parser("confirmatory"); common(p)
-    p.add_argument("phase", choices=["build-data", "admissibility", "freeze", "confirm", "report"])
+    p.add_argument("phase", choices=["build-data", "admissibility", "freeze", "confirm", "report", "study"])
     p.add_argument("--batch", help="a batch of runs named in confirmatory.batches (freeze / confirm / report)")
     p.set_defaults(fn=cmd_confirmatory)
     p = sub.add_parser("matched-signals"); common(p)

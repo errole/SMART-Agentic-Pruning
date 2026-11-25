@@ -50,3 +50,9 @@ confirmatory:
   planning_rates: null
   batches:
     pilot: [[ppl_top1, 0], [cap_top1, 0], [cap_klprobe, 0]]
+  secondary: {s3_tolerance: 0.25, s4_sizes: [5, 10], s4_draws: 4, s4_seed: 20261124, post_hoc_batches: [pilot],
+              c1_bootstrap: {resamples: 200, seed: 0}}
+  study:     # paths are set by tests/test_confirmatory.py
+    out_dir: null
+    models: []
+    sensitivity_exclude: {model_key: smoke, seed: 0, label: the pilot}

@@ -244,13 +244,37 @@ def _confirmatory(root: Path, folder: str) -> list[str]:
         S = _opt(rp)
         for r in (S or {}).get("runs", []):
             sf = (r.get("screened_final") or {}).get("params_removed", 0)
+            sec = r.get("secondary")
+            extra = (f"; S1 overshoot {sec['S1']['overshoot_parameters']:,}; S3 (5 pts) {sec['S3']['parameters_removed']:,}"
+                     f" [{sec['label']}]") if sec else ""
             out.append(f"{S['model_key']} {S['batch']} {r['run_id']}: confirmed {r['confirmed_parameters_removed']:,} params "
                        f"({100 * r['confirmed_fraction_removed']:.2f} %), checkpoint {r['claim_position']}; screened final {sf:,}; "
-                       f"stop {r['stop_reason']}")
+                       f"stop {r['stop_reason']}{extra}")
     return out
 
 
-EXTRACTORS = {"confirmatory": _confirmatory, "kl_probe_smoke": _kl_probe_smoke, "population_regate": _population_regate, "pool_signals": _pool_signals, "screen_confirm": _screen_confirm,
+def _confirmatory_study(root: Path, folder: str) -> list[str]:
+    S = _opt(root / folder / "study.json")
+    if not S:
+        return []
+    out = []
+    for M in S["models"]:
+        P = M["primary"]
+        out.append(f"{M['label']} {M['model_key']}: confirmed params removed, mean over seeds - "
+                   + ", ".join(f"{a} {P[a]['mean']:,.0f}" for a in ("ppl_top1", "cap_top1", "cap_klprobe") if P[a]["mean"] is not None)
+                   + f"; (b)-(a) same sign in every seed: {P['b_minus_a']['consistent_sign']}; (c)-(b): {P['c_minus_b']['consistent_sign']}")
+        c1 = M["c1"]["tested_summary"]
+        pt = lambda v: "n/a" if v is None else f"{100 * v:+.2f}"  # noqa: E731
+        out.append(f"{M['label']} C1: mean worst-category gap {pt(c1['mean_worst_gap'])} points, 95 % CI "
+                   f"[{pt(c1['ci95'][0])}, {pt(c1['ci95'][1])}]; C1 criterion {M['c1']['model_criterion_met']}; "
+                   f"C4 criterion {M['c4']['model_criterion_met']}")
+    p = S["c6"]["all"]["primary_KL_vs_rank2"]
+    out.append(f"C6 KL vs rank 2: {p['better']} better / {p['worse']} worse / {p['ties']} ties of {p['rejections']}, p = {p['p_two_sided']:.3g}; "
+               f"criterion met {S['c6']['criterion_met']}; C1 supported {S['c1_supported']}; C4 supported {S['c4_supported']}")
+    return out
+
+
+EXTRACTORS = {"confirmatory": _confirmatory, "confirmatory_study": _confirmatory_study, "kl_probe_smoke": _kl_probe_smoke, "population_regate": _population_regate, "pool_signals": _pool_signals, "screen_confirm": _screen_confirm,
               "matched_signals": _matched_signals, "matched_signals_ordinary": _matched_signals_ordinary, "search_runs": _search_runs, "ranked_run": _ranked_run, "boundary": _boundary, "compare": _compare,
               "ranker": _ranker, "fixed_state": _fixed_state, "gap": _gap, "adaptive_replay": _adaptive_replay,
               "gate_design": _gate_design}
