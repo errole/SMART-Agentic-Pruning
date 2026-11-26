@@ -22,6 +22,7 @@ run-derived tables and reports; the changes are listed in `REVIEW.md`. No record
 | ⟨plan⟩ | `docs/confirmatory_study_plan.md` |
 | ⟨report⟩ | `docs/confirmatory_report.md` |
 | ⟨dev⟩ | `docs/paper/workshop/tables/deviations.md` |
+| ⟨comp⟩ | `docs/compensation_feasibility_report.md` (EXPLORATORY: development model Qwen3-1.7B, seen items; its numbers come from `compensation-feasibility/analysis/analysis.json`) |
 
 ## Abstract
 
@@ -427,7 +428,12 @@ writing ⟨frontier⟩.
   data; MMLU-CF was built to be contamination-free.
 * **One operator and one ranker.** Every run removes MLP channels chosen by gradient top-1 and leaves the remaining
   weights unchanged. Operators that update the remaining weights after each removal (as SparseGPT does; Frantar &
-  Alistarh, 2023) lose less accuracy per step and may certify more. We did not test them.
+  Alistarh, 2023) might certify more. One exploratory check on the development model (Qwen3-1.7B, 12,000 previously
+  seen items) did not show it. With each pruned layer's output weights refit by ridge least squares, at identical
+  masks, both trajectories stayed within 2 points for the same 13 steps (5.9 % of parameters), and none of the 52
+  paired step-by-category comparisons over those steps differed ⟨comp⟩. Over the same steps the refit cut the layer's
+  reconstruction error by about 30 % (median; a third over all 40 steps) and, from step 9 on, lowered perplexity.
+  That is one refit rule on one model, with masks chosen for the uncompensated model.
 * **Arm (a) never rejected.** Its 15 % threshold is relative to the parent checkpoint. The comparison with the
   capability gate is therefore a comparison with an unscreened trajectory, and it says nothing about a stricter
   perplexity rule. One stricter rule is examined post hoc in §5.2.
