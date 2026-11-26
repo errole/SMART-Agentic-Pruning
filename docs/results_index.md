@@ -1,6 +1,6 @@
 # CAP-Prune results index
 
-Generated 2026-11-25 10:43:50 from `C:\Users\elbas\cap-prune-runs`. Code: commit `b2752d750a56fda33deec05325d777a3b34d7c8e` on `research/exploratory-and-paper-a` (working tree clean: True). Environment: {'python': '3.12.10', 'platform': 'Windows-11-10.0.26300-SP0', 'torch': '2.11.0+cu128', 'cuda': '12.8', 'gpu': 'NVIDIA GeForce RTX 5090', 'transformers': '5.23.0'}.
+Generated 2026-11-26 05:24:20 from `C:\Users\elbas\cap-prune-runs`. Code: commit `5e2985bd4ce05ddad3d40b3a4727a24212e1972b` on `research/compensation-feasibility` (working tree clean: True). Environment: {'python': '3.12.10', 'platform': 'Windows-11-10.0.26300-SP0', 'torch': '2.11.0+cu128', 'cuda': '12.8', 'gpu': 'NVIDIA RTX PRO 6000 Blackwell Max-Q Workstation Edition', 'transformers': '5.23.0'}.
 
 Code provenance: results produced before the first research commit came from uncommitted code; for runs with a `registration.json` the SHA-256 (16 hex) of the key source files at registration is listed with the files that have changed since. Headline numbers are copied from each experiment's own JSON outputs.
 
@@ -28,7 +28,8 @@ Code provenance: results produced before the first research commit came from unc
 | **confirmatory-granite-3.3-2b**: Confirmatory study, model 2 Granite-3.3-2B-Base (main = seeds 0-2; arms a/b/c, every frozen checkpoint scored) | confirmatory (plan v1 f0152c8, amendments 1-3); S1-S4 added after the pilot | `configs/confirmatory.yaml` 11370e65afbc<br>`configs/confirmatory_granite.yaml` 759e0816a1ab<br>`docs/confirmatory_study_plan.md` 352e52f4aa92 | `C:\Users\elbas\cap-prune-runs\confirmatory\granite-3.3-2b\registration.md`<br>`C:\Users\elbas\cap-prune-runs\confirmatory\granite-3.3-2b\batches\main\report.md` | none |
 | **confirmatory-study**: Confirmatory study summary over both models: primary endpoint paired across seeds, C1, C4, C6, S1-S4, cost | confirmatory (primary, C1, C4, C6); S1-S4 secondary, added after the pilot | `configs/confirmatory.yaml` 11370e65afbc<br>`docs/confirmatory_study_plan.md` 352e52f4aa92 | `C:\Users\elbas\cap-prune-runs\confirmatory\study\study.md` | not registered (pre-commit code) |
 | **exploratory-confirmatory-outcomes**: EXPLORATORY analyses of the scored confirmation outcomes: certification frontier (2-5 points x 500-full items), loss curves, C1 mechanism | exploratory (post hoc on the confirmatory outcomes; not part of the confirmatory claims) | `configs/confirmatory.yaml` 11370e65afbc | `C:\Users\elbas\cap-prune-runs\exploratory\exploratory.md` | not registered (pre-commit code) |
-| **bound-development**: Bound development for paper B: candidate per-category bounds, simulated validity and sample sizes, applied to the scored outcomes; go/no-go | method development on seen data (plan 231c2a6 committed before any candidate touched real data); selects a method, not a claim | `configs/confirmatory.yaml` 11370e65afbc<br>`docs/bound_development_plan.md` 50dc52df2174 | `C:\Users\elbas\cap-prune-runs\bound-dev\simulation.md`<br>`C:\Users\elbas\cap-prune-runs\bound-dev\real_data.md` | not registered (pre-commit code) |
+| **bound-development**: Bound development for paper B: candidate per-category bounds, simulated validity and sample sizes, applied to the scored outcomes; go/no-go | method development on seen data (plan 231c2a6 committed before any candidate touched real data); selects a method, not a claim | `configs/confirmatory.yaml` 11370e65afbc<br>`docs/bound_development_plan.md` 0446a54b3553 | `C:\Users\elbas\cap-prune-runs\bound-dev\simulation.md`<br>`C:\Users\elbas\cap-prune-runs\bound-dev\real_data.md` | not registered (pre-commit code) |
+| **compensation-feasibility**: EXPLORATORY: does a ridge least-squares refit of each pruned layer's output weights reduce the accuracy lost per step? Same masks, with and without (Qwen3-1.7B) | exploratory (development model, seen items; plan e9a61d2 committed before any model was scored) | `configs/compensation_feasibility.yaml` 1d1f3a81376f<br>`docs/compensation_feasibility_plan.md` 683d0b160fd1 | `C:\Users\elbas\cap-prune-runs\compensation-feasibility\analysis\analysis.md` | not registered (pre-commit code) |
 | **kl-probe-smoke-qwen**: GPU smoke test of the amendment-2 proposer (KL probe after a rank-1 rejection, counterfactual log) on Qwen3-1.7B | smoke test (NOT a result; rank-1 reject forced by the test hook) | `configs/kl_probe_smoke_qwen.yaml` 0fa7d12e5b0d | - | not registered (pre-commit code) |
 | **unstructured**: Unstructured-mode CAP-Prune matrix (started, never progressed past setup) | incomplete | `configs/base.yaml` ef931627011e | - | not registered (pre-commit code) |
 
@@ -204,6 +205,12 @@ Folder `bound-dev` (present); docs `docs/bound_development_plan.md`; runs: none.
 * best valid bound exact_score; condition 1 (>= 25 % fewer items at 1 pt, q 6-9 %): True (ratios 0.51, 0.51, 0.49, 0.51)
 * condition 2 (arm (a) orders, >= 4 of 6 pairs gain a checkpoint; ceiling 5): False (0 of 6); B proceeds: False
 
+### compensation-feasibility: EXPLORATORY: does a ridge least-squares refit of each pruned layer's output weights reduce the accuracy lost per step? Same masks, with and without (Qwen3-1.7B)
+Folder `compensation-feasibility` (present); docs `docs/compensation_feasibility_report.md`; runs: none.
+* EXPLORATORY (development model Qwen3-1.7B; seen items)
+* mask-only reach R_mask = 13 steps (L = 40; extended: False)
+* compensated reach R_comp = 13; verdict NO-GO (GO: R_comp >= 2 R_mask and +5; NO-GO: < 1.5 R_mask)
+
 ### kl-probe-smoke-qwen: GPU smoke test of the amendment-2 proposer (KL probe after a rank-1 rejection, counterfactual log) on Qwen3-1.7B
 Folder `_smoke/kl-probe-qwen` (present); docs `docs/screen_confirm_protocol.md`; runs: gradient_top1__t00__s0 (science 293cb08bc808f2a1).
 * gradient_top1__t00__s0: stop proposal_cap, 6,500 questions charged (KL probe 4,000), probe picks [3]
@@ -240,6 +247,9 @@ Folder `unstructured` (present); docs `README.md`; runs: cap_prune__t20__s0 (sci
 * `C:\Users\elbas\cap-prune-runs\_tests\2026-11-24_21ab08de3818`: 154 passed in 939.68s (0:15:39) (commit `21ab08de3818`)
 * `C:\Users\elbas\cap-prune-runs\_tests\2026-11-24_fbb65f148b39`: 147 passed in 863.59s (0:14:23) (commit `fbb65f148b39`)
 * `C:\Users\elbas\cap-prune-runs\_tests\2026-11-25_1664df04c7e3`: 154 passed in 996.78s (0:16:36) (commit `1664df04c7e3`)
+* `C:\Users\elbas\cap-prune-runs\_tests\2026-11-25_355866462662`: 171 passed in 1114.91s (0:18:34) (commit `355866462662`)
+* `C:\Users\elbas\cap-prune-runs\_tests\2026-11-26_4324cce9d4c9`: 172 passed in 1142.76s (0:19:02) (commit `4324cce9d4c9`)
+* `C:\Users\elbas\cap-prune-runs\_tests\2026-11-26_d541290ce453`: 172 passed in 1222.65s (0:20:22) (commit `d541290ce453`)
 
 ## Backups (verified copies of the runs root)
 
@@ -250,3 +260,4 @@ Folder `unstructured` (present); docs `README.md`; runs: cap_prune__t20__s0 (sci
 * 2026-11-23_221838: `cap-prune-runs_2026-11-23_221838_b97fbb89e772.zip` (187 MB, 8687 files, sha256 `689985a3fa25dd8d...`) -> `E:\cap-prune-backups\cap-prune-runs_2026-11-23_221838_b97fbb89e772.zip` verified=True; `C:\Users\elbas\OneDrive\Documents\Education\NYU Tandon - GY\Efficient AI Computing Algorithm and Implementation\project\CAP-Prune-backups\cap-prune-runs_2026-11-23_221838_b97fbb89e772.zip` verified=True
 * 2026-11-24_022031: `cap-prune-runs_2026-11-24_022031_2a8f20ddddc2.zip` (284 MB, 10692 files, sha256 `6a74e6a48b84ee9d...`) -> `E:\cap-prune-backups\cap-prune-runs_2026-11-24_022031_2a8f20ddddc2.zip` verified=True; `C:\Users\elbas\OneDrive\Documents\Education\NYU Tandon - GY\Efficient AI Computing Algorithm and Implementation\project\CAP-Prune-backups\cap-prune-runs_2026-11-24_022031_2a8f20ddddc2.zip` verified=True
 * 2026-11-25_092139: `cap-prune-runs_2026-11-25_092139_1664df04c7e3.zip` (733 MB, 15144 files, sha256 `99e7d591d14fe6f3...`) -> `E:\cap-prune-backups\cap-prune-runs_2026-11-25_092139_1664df04c7e3.zip` verified=True; `c:\Users\elbas\OneDrive\Documents\Education\NYU Tandon - GY\Efficient AI Computing Algorithm and Implementation\project\CAP-Prune-backups\cap-prune-runs_2026-11-25_092139_1664df04c7e3.zip` verified=True
+* 2026-11-25_110330: `cap-prune-runs_2026-11-25_110330_355866462662.zip` (740 MB, 16905 files, sha256 `4e128ac7a384e460...`) -> `E:\cap-prune-backups\cap-prune-runs_2026-11-25_110330_355866462662.zip` verified=True; `c:\Users\elbas\OneDrive\Documents\Education\NYU Tandon - GY\Efficient AI Computing Algorithm and Implementation\project\CAP-Prune-backups\cap-prune-runs_2026-11-25_110330_355866462662.zip` verified=True
