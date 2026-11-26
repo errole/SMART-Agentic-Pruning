@@ -85,7 +85,9 @@ Median certified parameters removed, % of the dense model, arm (b); arm (a) is i
 | Granite-3.3-2B | 5 points | 1.24 | 1.86 | 2.48 | 2.48 |
 
 * Granite's arm (c) reaches 2.48 % at 3 points and 4.35 % at 5 points, at full n.
-* **Nothing is certifiable at 500 items per category at 2–3 points.**
+* **At 500 items per category the median is zero at 2–3 points.** No subsample certifies anything at 2 points; at 3
+  points, 84 of the 900 subsamples certify one or two steps. (Corrected 2026-11-26: this line said "nothing is
+  certifiable".)
 * **Check:** the computation reproduces every recorded 3-point claim, S3 (5 points, full n) and S4 (3 points,
   subsamples) before writing.
 

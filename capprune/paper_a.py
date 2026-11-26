@@ -262,6 +262,90 @@ def tables(S: dict, F: dict, C1m: dict, src: dict) -> dict[str, str]:
     return T
 
 
+
+def perplexity_arm_a(cfg: dict, root: Path, LC: dict) -> tuple[str, list[str]]:
+    """Section 5.2's figures for arm (a): from each ``ppl_top1`` run's journal (the perplexity screen's own records:
+    dense C4 perplexity ``ppl0``, each accepted trial's ``ppl_trial`` and ``relative_increase``), aligned to the frozen
+    order by mask hash, and from ``loss_curves.json`` (per-category confirmation estimates)."""
+    import json
+
+    curves = {(M["model_key"], r["seed"]): (M, r) for M in LC["models"] for r in M["runs"] if r["method"] == "ppl_top1"}
+    rows, inputs = [], []
+    for m in cfg["confirmatory"]["study"]["models"]:
+        od = resolve_path(cfg, m["out_dir"])
+        for b in m["batches"]:
+            bdir = od / "batches" / b
+            for rec in read_json(bdir / "confirm.json")["runs"]:
+                if rec["method"] != "ppl_top1":
+                    continue
+                rid, seed = rec["run_id"], int(rec["seed"])
+                order = read_json(bdir / f"{rid}.order.json")["order"]
+                jpath = od / "runs" / rid / "journal.jsonl"
+                inputs += [str(jpath), str(bdir / f"{rid}.order.json")]
+                steps, rises, ppl0 = {}, [], None
+                for line in jpath.read_text(encoding="utf-8").splitlines():
+                    j = json.loads(line)
+                    g = j.get("gate") or {}
+                    if j.get("type") != "iteration" or g.get("kind") != "perplexity":
+                        continue
+                    ppl0 = g["ppl0"] if ppl0 is None else ppl0
+                    if abs(g["ppl0"] - ppl0) > 1e-9:
+                        raise SystemExit(f"{jpath}: the dense perplexity changes within the run")
+                    rises.append(float(g["relative_increase"]))
+                    if g["decision"] == "accept":
+                        steps[j["trial_mask_hash"]] = float(g["ppl_trial"])
+                ratio = []
+                for o in order:
+                    if o["mask_hash"] not in steps:
+                        raise SystemExit(f"{rid}: frozen checkpoint {o['position']} has no accepted perplexity record")
+                    ratio.append(steps[o["mask_hash"]] / ppl0)
+                M, r = curves[(read_json(bdir / "report.json")["model_key"], seed)]
+                dense = int(rec["dense_parameters"])
+                last = r["checkpoints"][-1]
+                est = {c: last["categories"][c]["estimate"] for c in CATS}
+                worst = max(est, key=est.get)
+                claim = r["confirmation_claim_position"] or 0
+                rows.append({"label": M["label"], "model": M["model_key"], "seed": seed, "ppl0": ppl0,
+                             "accepted": len(steps), "proposals": len(rises), "max_rise": max(rises),
+                             "ratio_claim": ratio[claim - 1] if claim else None, "ratio_end": ratio[-1],
+                             "claim": claim, "end": r["screen_stop_position"],
+                             "end_frac": last["params_removed"] / dense,
+                             "overshoot_frac": (last["params_removed"] - (r["checkpoints"][claim - 1]["params_removed"] if claim else 0)) / dense,
+                             "est": est, "worst": worst})
+    rows.sort(key=lambda x: (x["model"] != "smollm3-3b", x["seed"]))
+
+    def _r3(v):
+        return "–" if v is None else f"{v:.3f}"
+
+    L = ["# Arm (a), the perplexity screen: the figures behind section 5.2", "",
+         "Sources: each `ppl_top1` run's `journal.jsonl` (dense C4 perplexity `ppl0`, each trial's `ppl_trial` and "
+         "`relative_increase`; the threshold is 15 % over the parent) aligned to `batches/<batch>/<run>.order.json` by mask "
+         "hash; per-category estimates from `~/cap-prune-runs/exploratory/loss_curves.json`.", "",
+         "| model | seed | accepted / proposals | largest one-step rise | dense C4 perplexity | perplexity / dense at the claim | "
+         "at the screen's end | claim (checkpoint) | steps from claim to end | removed at the end | overshoot | "
+         + " | ".join(f"{c} at the end" for c in CATS) + " | worst |", "|---|---|---|---|---|---|---|---|---|---|---|" + "---|" * (len(CATS) + 1)]
+    for x in rows:
+        L.append(f"| {x['label']} | {x['seed']} | {x['accepted']} / {x['proposals']} | {100 * x['max_rise']:.1f} % | {x['ppl0']:.2f} | "
+                 f"{_r3(x['ratio_claim'])} | "
+                 f"{x['ratio_end']:.3f} | {x['claim']} | {x['end'] - x['claim']} | {100 * x['end_frac']:.2f} % | {100 * x['overshoot_frac']:.2f} % | "
+                 + " | ".join(f"{100 * x['est'][c]:+.2f}" for c in CATS) + f" | {x['worst']} |")
+
+    def rng(vals, f):
+        return f"{f(min(vals))} to {f(max(vals))}"
+    L += ["", "**Ranges quoted in the draft** (computed here; check against the text):", ""]
+    for key, lab in (("smollm3-3b", "SmolLM3"), ("granite-3.3-2b", "Granite")):
+        xs = [x for x in rows if x["model"] == key]
+        L.append(f"* {lab}: removed at the end {rng([x['end_frac'] for x in xs], lambda v: f'{100 * v:.1f} %')}; per-category "
+                 f"loss at the end {rng([v for x in xs for v in x['est'].values()], lambda v: f'{100 * v:+.1f}')}; worst category: "
+                 f"{', '.join(sorted({x['worst'] for x in xs}))}; perplexity / dense at the end {rng([x['ratio_end'] for x in xs], lambda v: f'{v:.2f}')}; "
+                 f"largest one-step rise {rng([x['max_rise'] for x in xs], lambda v: f'{100 * v:.1f} %')}.")
+    L.append(f"* All runs: claims at checkpoints {rng([x['claim'] for x in rows], str)}; {rng([x['end'] - x['claim'] for x in rows], str)} "
+             f"steps from claim to the screen's end; overshoot {rng([x['overshoot_frac'] for x in rows], lambda v: f'{100 * v:.1f} %')}; "
+             f"worst-category loss at the end {rng([x['est'][x['worst']] for x in rows], lambda v: f'{100 * v:+.1f}')} points; "
+             f"perplexity / dense at the claim {rng([x['ratio_claim'] for x in rows if x['ratio_claim']], lambda v: f'{v:.3f}')}.")
+    return "\n".join(L) + "\n", inputs
+
+
 def build(cfg: dict, out: Path) -> Path:
     root = resolve_path(cfg, "~/cap-prune-runs")
     src = {"study": root / "confirmatory" / "study" / "study.json", "frontier": root / "exploratory" / "frontier.json",
@@ -273,12 +357,14 @@ def build(cfg: dict, out: Path) -> Path:
     figs = fig_loss_curves(LC, out) + fig_frontier(F, out) + fig_overshoot_cost(S, out)
     rel = {k: "~/cap-prune-runs/" + v.relative_to(root).as_posix() for k, v in src.items()}
     T = tables(S, F, C1m, rel)
+    T["perplexity_arm_a"], ppl_inputs = perplexity_arm_a(cfg, root, LC)
     for name, text in T.items():
         (out / "tables" / f"{name}.md").write_text(text, encoding="utf-8")
     manifest = ["# Generated files", "", "Regenerate with:", "", "```", "python -m capprune paper-a --config configs/confirmatory.yaml "
                 "--out docs/paper/workshop", "```", "", f"Last generated at commit `{_git('rev-parse', 'HEAD')[:7]}` "
                 f"(clean tree: {_git('status', '--porcelain') == ''}), {time.strftime('%Y-%m-%d %H:%M')}.", "",
-                "Inputs (run files):", ""] + [f"* `{v}`" for v in rel.values()] + ["", "Outputs:", ""]
+                "Inputs (run files):", ""] + [f"* `{v}`" for v in rel.values()] + [
+                "* the `ppl_top1` runs' `journal.jsonl` and `<run>.order.json` (for `tables/perplexity_arm_a.md`)", "", "Outputs:", ""]
     manifest += [f"* `figures/{Path(p).name}`" for p in figs] + [f"* `tables/{n}.md`" for n in T]
     manifest += ["", "Not generated: `tables/deviations.md` (transcribed from `docs/confirmatory_report.md`) and `draft.md`."]
     (out / "GENERATED.md").write_text("\n".join(manifest) + "\n", encoding="utf-8")

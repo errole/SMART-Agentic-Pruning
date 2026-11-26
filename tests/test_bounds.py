@@ -37,6 +37,22 @@ def test_exact_score_size_is_at_most_alpha_on_its_boundary(n):
     assert z < 0
 
 
+def test_exact_score_size_off_the_nuisance_grid_at_n_3000():
+    """The critical value is the supremum over a 400-point nuisance grid, so the test is exact only up to the grid's
+    resolution (docs/bound_development_plan.md section 8, note of 2026-11-25). At n = 3,000 and a 3-point limit, the
+    size between grid points near p_gained = 0.479 (98.8 % disagreement) exceeds 0.05 by about 7e-6. Inside the data
+    range (4-15 % disagreement) it stays below 0.05. If the grid is refined or the nuisance range restricted, this test
+    records the change."""
+    n, tol, alpha = 3000, 0.03, 0.05
+    z = B.exact_score_critical(n, tol, alpha)
+    off = np.arange(0.4780, 0.4810, 0.0001)
+    sizes = B.size_at(n, tol, z, off)
+    assert sizes.max() > alpha  # the documented excess
+    assert sizes.max() - alpha < 2e-5  # and its size
+    data = (np.arange(0.040, 0.15001, 0.0005) - tol) / 2
+    assert B.size_at(n, tol, z, data).max() <= alpha
+
+
 def test_exact_and_monte_carlo_certification_probabilities_agree():
     n, q, d = 500, 0.08, 0.01
     pl, pg = (q + d) / 2, (q - d) / 2

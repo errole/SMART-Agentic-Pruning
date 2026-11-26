@@ -154,12 +154,38 @@ computed on real data, the rule was replaced by the following.**
   * the reference reproduces `screen_confirm.certifies`;
   * the restricted MLE matches a brute-force maximization;
   * the exact test's size is ≤ α on its boundary;
+  * the exact test's size off the nuisance grid at n = 3,000 (added with the note of 2026-11-25 below);
   * exact and Monte Carlo certification probabilities agree;
   * the betting test's coverage at the boundary;
   * the normal bound's size exceeds α somewhere (why it cannot be adopted);
   * the go/no-go logic.
 * **Defects:** if an implementation defect is found after this commit, the fix is recorded here as a dated note before
   anything is rerun.
+
+**Note, 2026-11-25: the exact test is exact only up to the resolution of its nuisance grid.**
+
+**Where it was found.** In the review of the workshop draft ([`paper/workshop/REVIEW.md`](paper/workshop/REVIEW.md)),
+and reproduced here.
+
+**What happens.**
+* The critical value z\* of candidate (ii) is the supremum of the size over the 400-point nuisance grid (§2). Between
+  grid points the size can be higher.
+* At n = 3,000 and a 3-point limit (z\* = −1.6505), the size between grid points reaches 0.0500069 at p⁻ = 0.4792,
+  that is 98.8 % disagreement. That is 6.9 × 10⁻⁶ above α. The neighbouring grid points give at most 0.0498.
+* Over q = 4–15 %, the range the data occupy and the plan's validity grid covers, the size at n = 3,000 is at most
+  0.04925. The §3 boundary check at n = 3,000, 3,500 and 3,600 also stayed at or below 0.0494.
+* The review's check at n = 500, 1,000, 3,500 and 3,600 found no excess off the grid. It was not rerun here.
+
+**Consequences.**
+* §3's validity verdict and §7's verdict stand. The validity requirement is defined on the plan's grid, which this
+  excess lies outside.
+* `bound-dev` was not rerun, and `simulation.json` and `real_data.json` are unchanged.
+* Before candidate (ii) is used in any confirmatory analysis, fix it and register the fix. Either restrict the
+  nuisance range with a Berger–Boos confidence set (adding its γ to the size), or refine the grid near the binding
+  values and check the size off the grid.
+
+**Test:** `tests/test_bounds.py::test_exact_score_size_off_the_nuisance_grid_at_n_3000` records the excess, its size
+(< 2 × 10⁻⁵) and the size within q = 4–15 % (≤ α).
 
 ## 9. What this is not
 
