@@ -295,7 +295,8 @@ Excluding model 1 seed 0 leaves model 1's S4 medians and IQRs unchanged. Per-run
   * In model 2, (c) − (b) is positive in all 3 seeds (+31.5 to +62.9 M).
   * In model 1, it is positive in seed 2 only.
   * (b) − (a) is 0 except in model 2 seed 2. There, (a) reaches 110.1 M and (b)'s screen ends at 62.9 M.
-* **S4, sample size.** At 500 items per category, nothing is certifiable in any run. Certifiable compression grows
+* **S4, sample size.** At 500 items per category, nothing is certifiable in any run. [Erratum 2026-11-26: see
+  Errata.] Certifiable compression grows
   with n, and the full sets (3,000–3,600 per category) give the primary endpoint. A smaller confirmation set would
   have certified less in every run.
 
@@ -421,7 +422,7 @@ registered.
 | C4 | Not supported: (a) never confirms less than (b), although its endpoints exceed 3 points in every seed (+10 to +32). |
 | C6 | Not established: KL beats rank 2 in 11 of 19 untied rejections, p = 0.648. |
 | C2, C5 | Not evaluated here. |
-| S1–S4 (added after the pilot) | Overshoot (a) ≫ (c) > (b); cost per confirmed parameter (a) < (b) < (c) in every seed; at 5 points (c) ≥ (b) in every seed; nothing certifiable at 500 items per category. |
+| S1–S4 (added after the pilot) | Overshoot (a) ≫ (c) > (b); cost per confirmed parameter (a) < (b) < (c) in every seed; at 5 points (c) ≥ (b) in every seed; nothing certifiable at 500 items per category [erratum 2026-11-26: see Errata]. |
 
 ## Reproduce
 
@@ -438,3 +439,19 @@ The script runs these steps in order and stops at the first non-zero exit code:
 4. `confirmatory study`.
 
 Confirmation is cached, so a rerun replays the stored scores.
+
+## Errata
+
+**2026-11-26: S4 at 500 items per category.** Two statements in this report say that nothing is certifiable at 500
+items per category: the S4 bullet under "What S1–S4 show", and the S1–S4 row of "Summary of the claims". That
+overstates it.
+
+**Corrected statement.** At 500 items per category, the median certified compression (S4) is zero in every run. But
+84 of the 900 subsamples (50 per run × 18 runs) certified one or two steps at the 3-point limit:
+* SmolLM3: 45 of 450, at most 18.9 M;
+* Granite: 39 of 450, at most 31.5 M.
+
+**Source:** `~/cap-prune-runs/confirmatory/study/study.json`, `models[].per_run_secondary[].S4["500"].values`.
+
+**Not affected:** the S4 table in this report (medians and interquartile ranges) is correct and unchanged, and no
+recorded result changes. Found in the number check of the workshop draft (`docs/paper/workshop/REVIEW.md`).
