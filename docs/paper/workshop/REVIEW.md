@@ -7,6 +7,10 @@ Reviewed: `draft.md` at `3558664`. Result: `draft_v2.md` in this folder, made fr
 * v2 was checked against the run files and replaced `draft.md` in `440833e`; `draft_v2.md` no longer exists. The
   checks and the three mismatches are under "Number check of v2" below.
 * The items that are done are marked under "Still open".
+* §7's "One operator and one ranker" now reports the EXPLORATORY compensation check (⟨comp⟩, merged in PR #9),
+  replacing "We did not test them". Its figures were checked against `compensation-feasibility/analysis/analysis.json`;
+  two were reworded: the reconstruction-error cut is given within the 13-step range (median ×0.71; ×0.66 over 40
+  steps), and perplexity is lower only from step 9.
 
 ## What was checked
 
