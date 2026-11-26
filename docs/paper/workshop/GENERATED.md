@@ -6,7 +6,7 @@ Regenerate with:
 python -m capprune paper-a --config configs/confirmatory.yaml --out docs/paper/workshop
 ```
 
-Last generated at commit `b99e7a4` (clean tree before generating: True), 2026-11-26 00:00.
+Last generated at commit `a469e60` (clean tree before generating: True), 2026-11-26 00:55.
 
 Inputs (run files):
 
