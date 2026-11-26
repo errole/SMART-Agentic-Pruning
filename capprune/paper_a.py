@@ -347,6 +347,7 @@ def perplexity_arm_a(cfg: dict, root: Path, LC: dict) -> tuple[str, list[str]]:
 
 
 def build(cfg: dict, out: Path) -> Path:
+    commit, clean = _git("rev-parse", "HEAD"), _git("status", "--porcelain") == ""  # before anything is written
     root = resolve_path(cfg, "~/cap-prune-runs")
     src = {"study": root / "confirmatory" / "study" / "study.json", "frontier": root / "exploratory" / "frontier.json",
            "loss_curves": root / "exploratory" / "loss_curves.json", "c1_mechanism": root / "exploratory" / "c1_mechanism.json"}
@@ -361,8 +362,8 @@ def build(cfg: dict, out: Path) -> Path:
     for name, text in T.items():
         (out / "tables" / f"{name}.md").write_text(text, encoding="utf-8")
     manifest = ["# Generated files", "", "Regenerate with:", "", "```", "python -m capprune paper-a --config configs/confirmatory.yaml "
-                "--out docs/paper/workshop", "```", "", f"Last generated at commit `{_git('rev-parse', 'HEAD')[:7]}` "
-                f"(clean tree: {_git('status', '--porcelain') == ''}), {time.strftime('%Y-%m-%d %H:%M')}.", "",
+                "--out docs/paper/workshop", "```", "", f"Last generated at commit `{commit[:7]}` "
+                f"(clean tree before generating: {clean}), {time.strftime('%Y-%m-%d %H:%M')}.", "",
                 "Inputs (run files):", ""] + [f"* `{v}`" for v in rel.values()] + [
                 "* the `ppl_top1` runs' `journal.jsonl` and `<run>.order.json` (for `tables/perplexity_arm_a.md`)", "", "Outputs:", ""]
     manifest += [f"* `figures/{Path(p).name}`" for p in figs] + [f"* `tables/{n}.md`" for n in T]
