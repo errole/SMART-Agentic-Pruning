@@ -18,6 +18,7 @@ run-derived tables and reports; the changes are listed in `REVIEW.md`. No record
 | ⟨conf⟩ | `confirmatory/<model>/batches/<batch>/confirm.json` |
 | ⟨frontier⟩, ⟨curves⟩, ⟨mech⟩ | `exploratory/frontier.json`, `exploratory/loss_curves.json`, `exploratory/c1_mechanism.json` (EXPLORATORY) |
 | ⟨bdsim⟩, ⟨bdreal⟩ | `bound-dev/simulation.json`, `bound-dev/real_data.json` (method development on seen data; plan `docs/bound_development_plan.md`) |
+| ⟨journals⟩ | `confirmatory/<model>/runs/ppl_top1__t00__s<seed>/journal.jsonl` (arm (a)'s perplexity records, aligned to `batches/<batch>/ppl_top1__t00__s<seed>.order.json`; tabulated with ⟨curves⟩ in `docs/paper/workshop/tables/perplexity_arm_a.md`) |
 | ⟨plan⟩ | `docs/confirmatory_study_plan.md` |
 | ⟨report⟩ | `docs/confirmatory_report.md` |
 | ⟨dev⟩ | `docs/paper/workshop/tables/deviations.md` |
@@ -119,9 +120,10 @@ This is an argument about what the gate can guarantee. Whether its pool estimate
 is hypothesis C1, and the answer is mixed (§5.1).
 
 Certifying each step on fresh data instead would need more items per category than the pools hold. On the development
-model (Qwen3-1.7B; exploratory, not part of this study), one step at zero true loss needed about 1,200–1,500 items per
-category for a 50 % chance of certifying 3 points, under the population re-gating rule. The Social Sciences pool here
-holds 954 (`~/cap-prune-runs/population-regate/report.md`, "Required pool sizes").
+model (Qwen3-1.7B; exploratory, not part of this study), one step at zero true loss and the median observed
+disagreement rate needed about 1,200–1,500 items per category for a 50 % chance of certifying 3 points, under the
+population re-gating rule. The Social Sciences pool here holds 954 (`~/cap-prune-runs/population-regate/report.md`,
+"Required pool sizes": n50 at the median disagreement rate, true loss 0).
 
 ### 2.3 Confirmation
 
@@ -301,6 +303,16 @@ design makes "(a) confirms less than (b)" impossible. The fixed sequence protect
 it after 2–4 steps, 26–28 steps before its screen ended. What C4 was meant to show appears instead as overshoot (S1,
 §5.5) and in the loss curves (Figure 1).
 
+**Perplexity along arm (a)** (post hoc; ⟨journals⟩ and ⟨curves⟩, tabulated in `tables/perplexity_arm_a.md`).
+* **No step came near the threshold.** The largest single-step rise was 3.0 %, and at most 1.7 % in five of the
+  six runs, against the 15 % allowed.
+* **The claims sit at small perplexity changes.** The claimed checkpoints are 0.9–4.7 % above the dense model's
+  perplexity, and the first failing ones 1.4–7.2 %.
+* **The endpoints** are 25–31 % (SmolLM3) and 39–52 % (Granite) above it.
+* **A cumulative rule would not have closed the gap.** Applying the 15 % threshold against the dense model instead
+  of the parent would have stopped the runs after 7–20 steps (110–378 M parameters removed). There the estimated
+  loss in the worst category was +3.0 to +17.7 points.
+
 ### 5.3 C6: does KL pick a better fallback than gradient rank 2?
 
 **Data:** at each of 21 rank-1 rejections in arm (c), the hold-out worst-category net flip of KL's pick was compared
@@ -418,7 +430,7 @@ writing ⟨frontier⟩.
   Alistarh, 2023) lose less accuracy per step and may certify more. We did not test them.
 * **Arm (a) never rejected.** Its 15 % threshold is relative to the parent checkpoint. The comparison with the
   capability gate is therefore a comparison with an unscreened trajectory, and it says nothing about a stricter
-  perplexity rule.
+  perplexity rule. One stricter rule is examined post hoc in §5.2.
 * **About 2 % compression.** At these sizes, certified training-free compression is small. Large compression in the
   literature uses retraining at the scale of billions of tokens (Minitron). We certify small steps; we do not compete
   with it.
