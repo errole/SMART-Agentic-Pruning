@@ -9,8 +9,9 @@ Reviewed: `draft.md` at `3558664`. Result: `draft_v2.md` in this folder, made fr
 * The items that are done are marked under "Still open".
 * §7's "One operator and one ranker" now reports the EXPLORATORY compensation check (⟨comp⟩, merged in PR #9),
   replacing "We did not test them". Its figures were checked against `compensation-feasibility/analysis/analysis.json`;
-  two were reworded: the reconstruction-error cut is given within the 13-step range (median ×0.71; ×0.66 over 40
-  steps), and perplexity is lower only from step 9.
+  two were reworded: the reconstruction-error cut is given over the 13 steps (median ×0.71; ×0.66 over 40 steps),
+  and perplexity is lower only from step 9. The 13-step range is named before the refit's effects, which it scopes,
+  and the bullet cites ⟨comp⟩ by key.
 
 ## What was checked
 
