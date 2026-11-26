@@ -176,6 +176,23 @@ experiments:
     extractor: confirmatory_study
     label: confirmatory (primary, C1, C4, C6); S1-S4 secondary, added after the pilot
     notes: "derived summary with no registration of its own: written by `capprune confirmatory study` at commit 21ab08d (clean tree; study.json records it) from the two registered model folders above"
+  - id: exploratory-confirmatory-outcomes
+    title: "EXPLORATORY analyses of the scored confirmation outcomes: certification frontier (2-5 points x 500-full items), loss curves, C1 mechanism"
+    folder: exploratory
+    configs: [configs/confirmatory.yaml]
+    reports: [exploratory/exploratory.md]
+    docs: docs/exploratory_report.md
+    extractor: exploratory
+    label: exploratory (post hoc on the confirmatory outcomes; not part of the confirmatory claims)
+    notes: "derived from the confirmatory batches' outcomes.npz (SHA-256 checked); the 3-point column reproduces every recorded claim, S3 and S4"
+  - id: bound-development
+    title: "Bound development for paper B: candidate per-category bounds, simulated validity and sample sizes, applied to the scored outcomes; go/no-go"
+    folder: bound-dev
+    configs: [configs/confirmatory.yaml, docs/bound_development_plan.md]
+    reports: [bound-dev/simulation.md, bound-dev/real_data.md]
+    docs: docs/bound_development_plan.md
+    extractor: bound_dev
+    label: method development on seen data (plan 231c2a6 committed before any candidate touched real data); selects a method, not a claim
   - id: kl-probe-smoke-qwen
     title: "GPU smoke test of the amendment-2 proposer (KL probe after a rank-1 rejection, counterfactual log) on Qwen3-1.7B"
     folder: _smoke/kl-probe-qwen

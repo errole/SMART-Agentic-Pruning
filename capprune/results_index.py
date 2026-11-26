@@ -274,7 +274,46 @@ def _confirmatory_study(root: Path, folder: str) -> list[str]:
     return out
 
 
-EXTRACTORS = {"confirmatory": _confirmatory, "confirmatory_study": _confirmatory_study, "kl_probe_smoke": _kl_probe_smoke, "population_regate": _population_regate, "pool_signals": _pool_signals, "screen_confirm": _screen_confirm,
+def _exploratory(root: Path, folder: str) -> list[str]:
+    F = _opt(root / folder / "frontier.json")
+    C = _opt(root / folder / "c1_mechanism.json")
+    if not F:
+        return []
+    out = ["EXPLORATORY (post hoc on the scored confirmation outcomes)"]
+    for M in F["models"]:
+        dp = M["dense_parameters"]
+        cells = []
+        for t in ("0.02", "0.03", "0.05"):
+            row = M["by_arm"]["cap_top1"][t]
+            cells.append(f"{round(100 * float(t))} pts: " + ", ".join(
+                f"n={n} {100 * row[n]['median'] / dp:.2f} %" for n in ("500", "1000", "2000", "full")))
+        out.append(f"{M['label']} {M['model_key']} frontier, arm (b), median certified: " + "; ".join(cells))
+    for M in (C or {}).get("models", []):
+        ss = M["categories"]["Social Sciences"]
+        out.append(f"{M['label']} C1 mechanism: Social Sciences pool {ss['gate_pool']}, gap {100 * ss['mean_gap_tested']:+.2f} pts, "
+                   f"{100 * ss['share_of_decisions_using_whole_pool']:.0f} % of decisions use the whole pool (8 points: no inference)")
+    return out
+
+
+def _bound_dev(root: Path, folder: str) -> list[str]:
+    S = _opt(root / folder / "simulation.json")
+    R = _opt(root / folder / "real_data.json")
+    out = ["method development on seen data: it selects a method, it is not a claim"]
+    if S:
+        v = S["validity"]["verdict"]
+        out.append("validity (worst coverage): " + ", ".join(f"{m} {x['worst_coverage']:.4f} ({'valid' if x['meets_requirement'] else 'not valid'})"
+                                                       for m, x in v.items()))
+        c1 = S["condition_1"]
+        out.append(f"best valid bound {S['best_valid_bound']['best']}; condition 1 (>= 25 % fewer items at 1 pt, q 6-9 %): "
+                   f"{c1['holds']} (ratios " + ", ".join(f"{w['ratio']:.2f}" for w in c1['per_q'].values() if w['ratio']) + ")")
+    if R:
+        c2, v = R["condition_2"], R["verdict"]
+        out.append(f"condition 2 (arm (a) orders, >= 4 of 6 pairs gain a checkpoint; ceiling 5): {c2['holds']} "
+                   f"({c2['pairs_with_one_more']} of {c2['of']}); B proceeds: {v['B_proceeds']}")
+    return out
+
+
+EXTRACTORS = {"confirmatory": _confirmatory, "confirmatory_study": _confirmatory_study, "exploratory": _exploratory, "bound_dev": _bound_dev, "kl_probe_smoke": _kl_probe_smoke, "population_regate": _population_regate, "pool_signals": _pool_signals, "screen_confirm": _screen_confirm,
               "matched_signals": _matched_signals, "matched_signals_ordinary": _matched_signals_ordinary, "search_runs": _search_runs, "ranked_run": _ranked_run, "boundary": _boundary, "compare": _compare,
               "ranker": _ranker, "fixed_state": _fixed_state, "gap": _gap, "adaptive_replay": _adaptive_replay,
               "gate_design": _gate_design}

@@ -21,6 +21,7 @@ dependencies = [
 
 [project.optional-dependencies]
 test = ["pytest>=7", "tokenizers>=0.15"]
+paper = ["matplotlib>=3.8"]
 
 [project.scripts]
 capprune = "capprune.cli:main"
