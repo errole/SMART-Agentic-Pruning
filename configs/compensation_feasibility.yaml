@@ -1,0 +1,75 @@
+# Compensation feasibility: EXPLORATORY, on the development model Qwen3-1.7B (docs/compensation_feasibility_plan.md).
+# Does refitting each pruned layer's output weights (ridge least squares to the dense layer output) reduce the accuracy
+# lost per pruning step? The same masks, with and without compensation.
+#
+#   python -m capprune supervise    --config configs/compensation_feasibility.yaml                 # reference trajectory (60 proposals)
+#   python -m capprune compensation reference  --config configs/compensation_feasibility.yaml      # freeze its masks; check vs gradient-live-ext
+#   python -m capprune compensation build-eval --config configs/compensation_feasibility.yaml      # 3,000 items per category
+#   python -m capprune compensation score      --config configs/compensation_feasibility.yaml --operator mask
+#   python -m capprune compensation compensate --config configs/compensation_feasibility.yaml      # refit along the masks (resumable)
+#   python -m capprune compensation score      --config configs/compensation_feasibility.yaml --operator comp
+#   python -m capprune compensation analyze    --config configs/compensation_feasibility.yaml
+#
+# Inherited from gradient_live.yaml (-> ranker.yaml -> ... -> qwen3_1.7b_structured.yaml): the model, the structured
+# MLP-channel operator, the candidate generator and step (4 units x 5 blocks x 64 channels), the profiling protocol.
+extends: gradient_live.yaml
+
+experiment:
+  runs_dir: ~/cap-prune-runs/compensation-feasibility/reference
+
+reliability:
+  keep_all_masks: true         # every accepted mask is kept (the compensated trajectory replays them)
+
+ranked_search:
+  max_proposals: 60            # the most the extension rule can ask for (plan section 3); the trajectory is 40 steps
+  question_cap: 100000         # unused: the perplexity screen reveals no questions
+
+methods:
+  mask_only_top1:              # gradient top-1, NO GATE: a perplexity screen with tau = 1e9 accepts every proposal
+    kind: ranked_search        #   and only records C4 validation perplexity at each step
+    overrides: {gate: {kind: capability, capability: {policy: threshold_aware}}, ranked_search: {screen: perplexity, ppl_tau: 1000000000.0}}
+
+matrix:
+  methods: [mask_only_top1]
+  targets: [0.0]
+  seeds: [0]
+
+compensation:
+  out_dir: ~/cap-prune-runs/compensation-feasibility
+  method: mask_only_top1
+  seed: 0
+  trajectory_steps: 40         # L; the extension rule may raise it to at most 60 (plan section 5)
+  max_steps: 60
+  reach_limit: 0.02            # 2.0 points, worst category, point estimate
+  ridge_fraction: 0.01         # lambda = 0.01 x mean(diag(C[K, K]))
+  calibration: {seed: 1, windows: 128}   # from the prepared 256-window C4-train pool; profiling uses seed 0
+  check_against: ~/cap-prune-runs/gradient-live-ext/gradient_top1__t00__s0/journal.jsonl
+  eval: {per_category: 3000, seed: 20261126, batch: 100, order_seed: 2026}
+  confirmation_rule: {alpha: 0.05, tolerance: 0.03}   # "on seen items, not a certificate"
+  sources:
+    mmlu_prepared_dir: ~/cap-prune-runs/data       # identical to cais/mmlu @ c30699e8 (test, validation, dev; checked)
+    mmlu_dataset: {repo: cais/mmlu, revision: c30699e8356da336a370243923dbaf21066bb9fe}
+    mmlu_file_sha256:
+      mmlu_probe.jsonl: 4fbb96420259fb41936336a636712d7c9668b138406c7eb90998ff64d46e1e6a
+      mmlu_final.jsonl: ea2706f62e2e263e2c5b44679af277a1eb772db40b6b3586f25b5df9f7bfb608
+      mmlu_dev.jsonl: ae5a3d55647671cdbfa9d2da88671d18d0c865c47110e784caa1fd2fd381c872
+      mmlu_fewshot.jsonl: 3c4b207bdd5cf5bfef7170b1f1a874fff755c3980390bda44c6b0d17a09a923e
+    mmlu_cf:
+      repo: microsoft/MMLU-CF
+      revision: c25b89a968a2062e422dd96ddf0fe3387507f0dd
+      raw_dir: ~/cap-prune-runs/data-audit/raw/mmlu-cf-c25b89a
+      files:
+        Biology: 7eec128cffcfec814461505d4b5122dc3fa4887a580b42a73fa7e03593c7d519
+        Business: 18dd545578e39df12812dd53076a96b76c1091760519a59f68bf58d1e314f47c
+        Chemistry: 063d66470358b32fd8dc532524845e97c349dd21983ba928b9d5d97c98539f77
+        Computer_Science: f973467d01a0bf62c5c6ab6cc60b7d286ae743d3157040d1d37938842d11580c
+        Economics: 93f2aa69542d7e625a938ea6626ef7f545563ec21b6014a75e5e3e6993c08068
+        Engineering: b54c3da63bd9664f54df773eaf13d896c9bca804ba3ca0f7fae0ff1a8946adff
+        Health: ffcae5b83c00ccb19f8b93f5191608da8ad7a1b0fcc94fbe5095455c2d30b9a9
+        History: 9b610a66bb01899aafc0080ac1695604615075d15dda2999d52907bb408b7d39
+        Law: 09873234f0abacfdcff2115187e51d1808b104cfd25ae150c26ed46c6a131168
+        Math: abec3c0c0e615acf45072422d51c55f4ffdd731aa4ad71a589bfa6830e89b6b0
+        Other: 9a5614da0ae1100cf9fe2985aa4ddb745b29cfc84824eddf21ddf24c0be6a013
+        Philosophy: 43fcbfa03ed9b315f98eda44bf23fad79b16c4ff8bfca3c74cd0987368e85d67
+        Physics: cff3650ea352476ba41733a7a4f0b99dc7ce07be95641f3fa4dca90d52705c5d
+        Psychology: 320642aeb3ad2fe52ec7821cb648418de53001ea44bc4fb65932ff15b98b4eab

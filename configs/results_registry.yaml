@@ -193,6 +193,14 @@ experiments:
     docs: docs/bound_development_plan.md
     extractor: bound_dev
     label: method development on seen data (plan 231c2a6 committed before any candidate touched real data); selects a method, not a claim
+  - id: compensation-feasibility
+    title: "EXPLORATORY: does a ridge least-squares refit of each pruned layer's output weights reduce the accuracy lost per step? Same masks, with and without (Qwen3-1.7B)"
+    folder: compensation-feasibility
+    configs: [configs/compensation_feasibility.yaml, docs/compensation_feasibility_plan.md]
+    reports: [compensation-feasibility/analysis/analysis.md]
+    docs: docs/compensation_feasibility_report.md
+    extractor: compensation
+    label: exploratory (development model, seen items; plan e9a61d2 committed before any model was scored)
   - id: kl-probe-smoke-qwen
     title: "GPU smoke test of the amendment-2 proposer (KL probe after a rank-1 rejection, counterfactual log) on Qwen3-1.7B"
     folder: _smoke/kl-probe-qwen
