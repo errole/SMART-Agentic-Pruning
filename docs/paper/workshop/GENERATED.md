@@ -6,7 +6,7 @@ Regenerate with:
 python -m capprune paper-a --config configs/confirmatory.yaml --out docs/paper/workshop
 ```
 
-Last generated at commit `563239b` (clean tree: False), 2026-11-25 10:43.
+Last generated at commit `b99e7a4` (clean tree before generating: True), 2026-11-26 00:00.
 
 Inputs (run files):
 
@@ -14,6 +14,7 @@ Inputs (run files):
 * `~/cap-prune-runs/exploratory/frontier.json`
 * `~/cap-prune-runs/exploratory/loss_curves.json`
 * `~/cap-prune-runs/exploratory/c1_mechanism.json`
+* the `ppl_top1` runs' `journal.jsonl` and `<run>.order.json` (for `tables/perplexity_arm_a.md`)
 
 Outputs:
 
@@ -30,5 +31,6 @@ Outputs:
 * `tables/c1.md`
 * `tables/c6.md`
 * `tables/frontier.md`
+* `tables/perplexity_arm_a.md`
 
 Not generated: `tables/deviations.md` (transcribed from `docs/confirmatory_report.md`) and `draft.md`.
