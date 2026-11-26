@@ -439,6 +439,23 @@ def cmd_bound_dev(args) -> int:
     return 0
 
 
+def cmd_compensation(args) -> int:
+    from . import compensation_feasibility as cf
+    from .utils.log import setup_logging
+
+    setup_logging()
+    cfg = _cfg(args)
+    if args.phase == "score" and not args.operator:
+        raise SystemExit("compensation score needs --operator mask|comp")
+    p = {"reference": lambda: cf.reference(cfg), "build-eval": lambda: cf.build_eval(cfg),
+         "score": lambda: cf.score(cfg, args.operator), "compensate": lambda: cf.compensate(cfg),
+         "analyze": lambda: cf.analyze(cfg)}[args.phase]()
+    if p.suffix == ".md":
+        print(p.read_text(encoding="utf-8"))
+    print(f"\nwritten: {p}")
+    return 0
+
+
 def cmd_paper_a(args) -> int:
     from .paper_a import build
 
@@ -573,6 +590,10 @@ def main(argv=None) -> int:
     p = sub.add_parser("bound-dev", help="bound development (docs/bound_development_plan.md; CPU)"); common(p)
     p.add_argument("phase", choices=["simulate", "apply"])
     p.set_defaults(fn=cmd_bound_dev)
+    p = sub.add_parser("compensation", help="EXPLORATORY: compensation feasibility on Qwen3-1.7B (docs/compensation_feasibility_plan.md)"); common(p)
+    p.add_argument("phase", choices=["reference", "build-eval", "score", "compensate", "analyze"])
+    p.add_argument("--operator", choices=["mask", "comp"])
+    p.set_defaults(fn=cmd_compensation)
     p = sub.add_parser("paper-a", help="paper A figures and tables from run files (matplotlib)"); common(p)
     p.add_argument("--out", default="docs/paper/workshop")
     p.set_defaults(fn=cmd_paper_a)
