@@ -263,10 +263,14 @@ def tables(S: dict, F: dict, C1m: dict, src: dict) -> dict[str, str]:
 
 
 
-def perplexity_arm_a(cfg: dict, root: Path, LC: dict) -> tuple[str, list[str]]:
+def perplexity_arm_a(cfg: dict, root: Path, LC: dict, cumulative_tau: float = 0.15) -> tuple[str, list[str]]:
     """Section 5.2's figures for arm (a): from each ``ppl_top1`` run's journal (the perplexity screen's own records:
     dense C4 perplexity ``ppl0``, each accepted trial's ``ppl_trial`` and ``relative_increase``), aligned to the frozen
-    order by mask hash, and from ``loss_curves.json`` (per-category confirmation estimates)."""
+    order by mask hash, and from ``loss_curves.json`` (per-category confirmation estimates).
+
+    Post hoc, it also applies a cumulative rule: the same 15 % threshold against the dense model instead of the parent.
+    Under it the run stops before the first checkpoint with perplexity / dense > 1 + tau; that checkpoint is reported, and
+    checked to be the last one with perplexity / dense <= 1 + tau."""
     import json
 
     curves = {(M["model_key"], r["seed"]): (M, r) for M in LC["models"] for r in M["runs"] if r["method"] == "ppl_top1"}
@@ -300,49 +304,97 @@ def perplexity_arm_a(cfg: dict, root: Path, LC: dict) -> tuple[str, list[str]]:
                         raise SystemExit(f"{rid}: frozen checkpoint {o['position']} has no accepted perplexity record")
                     ratio.append(steps[o["mask_hash"]] / ppl0)
                 M, r = curves[(read_json(bdir / "report.json")["model_key"], seed)]
+                cps = r["checkpoints"]
+                if [c["position"] for c in cps] != [o["position"] for o in order]:
+                    raise SystemExit(f"{rid}: loss curves and frozen order differ")
                 dense = int(rec["dense_parameters"])
-                last = r["checkpoints"][-1]
-                est = {c: last["categories"][c]["estimate"] for c in CATS}
-                worst = max(est, key=est.get)
+
+                def at(i):  # checkpoint index i: parameters removed and the worst category's estimate
+                    est = {c: cps[i]["categories"][c]["estimate"] for c in CATS}
+                    w = max(est, key=est.get)
+                    return cps[i]["params_removed"], w, est[w], est
+
                 claim = r["confirmation_claim_position"] or 0
-                rows.append({"label": M["label"], "model": M["model_key"], "seed": seed, "ppl0": ppl0,
+                ff = r["confirmation_first_failure"]
+                first_over = next((i for i, v in enumerate(ratio) if v > 1 + cumulative_tau), None)
+                stop_i = (len(ratio) - 1) if first_over is None else first_over - 1
+                last_le = max((i for i, v in enumerate(ratio) if v <= 1 + cumulative_tau), default=None)
+                end_params, end_worst, _, end_est = at(len(cps) - 1)
+                cum = None
+                if stop_i >= 0:
+                    p, w, e, _ = at(stop_i)
+                    cum = {"position": cps[stop_i]["position"], "params": p, "worst": w, "estimate": e,
+                           "ratio": ratio[stop_i], "next_ratio": None if first_over is None else ratio[first_over],
+                           "same_as_last_within": last_le == stop_i}
+                rows.append({"label": M["label"], "model": M["model_key"], "seed": seed, "ppl0": ppl0, "dense": dense,
                              "accepted": len(steps), "proposals": len(rises), "max_rise": max(rises),
-                             "ratio_claim": ratio[claim - 1] if claim else None, "ratio_end": ratio[-1],
-                             "claim": claim, "end": r["screen_stop_position"],
-                             "end_frac": last["params_removed"] / dense,
-                             "overshoot_frac": (last["params_removed"] - (r["checkpoints"][claim - 1]["params_removed"] if claim else 0)) / dense,
-                             "est": est, "worst": worst})
+                             "ratio_claim": ratio[claim - 1] if claim else None,
+                             "first_fail": ff, "ratio_first_fail": None if ff is None else ratio[ff - 1],
+                             "ratio_end": ratio[-1], "claim": claim, "end": r["screen_stop_position"],
+                             "end_frac": end_params / dense,
+                             "overshoot_frac": (end_params - (cps[claim - 1]["params_removed"] if claim else 0)) / dense,
+                             "est": end_est, "worst": end_worst, "cumulative": cum})
     rows.sort(key=lambda x: (x["model"] != "smollm3-3b", x["seed"]))
 
-    def _r3(v):
+    def r3(v):
         return "–" if v is None else f"{v:.3f}"
+
+    def rng(vals, f):
+        vals = [v for v in vals if v is not None]
+        return f"{f(min(vals))} to {f(max(vals))}"
+
+    def pct(v):
+        return f"{100 * v:.1f} %"
+
+    def pts(v):
+        return f"{100 * v:+.1f}"
 
     L = ["# Arm (a), the perplexity screen: the figures behind section 5.2", "",
          "Sources: each `ppl_top1` run's `journal.jsonl` (dense C4 perplexity `ppl0`, each trial's `ppl_trial` and "
          "`relative_increase`; the threshold is 15 % over the parent) aligned to `batches/<batch>/<run>.order.json` by mask "
          "hash; per-category estimates from `~/cap-prune-runs/exploratory/loss_curves.json`.", "",
-         "| model | seed | accepted / proposals | largest one-step rise | dense C4 perplexity | perplexity / dense at the claim | "
-         "at the screen's end | claim (checkpoint) | steps from claim to end | removed at the end | overshoot | "
-         + " | ".join(f"{c} at the end" for c in CATS) + " | worst |", "|---|---|---|---|---|---|---|---|---|---|---|" + "---|" * (len(CATS) + 1)]
+         "## The screen and the confirmed claims", "",
+         "| model | seed | accepted / proposals | largest one-step rise | dense C4 perplexity | claim (checkpoint) | "
+         "steps from claim to end | removed at the end | overshoot | " + " | ".join(f"{c} at the end" for c in CATS) + " | worst |",
+         "|---|---|---|---|---|---|---|---|---|" + "---|" * (len(CATS) + 1)]
     for x in rows:
-        L.append(f"| {x['label']} | {x['seed']} | {x['accepted']} / {x['proposals']} | {100 * x['max_rise']:.1f} % | {x['ppl0']:.2f} | "
-                 f"{_r3(x['ratio_claim'])} | "
-                 f"{x['ratio_end']:.3f} | {x['claim']} | {x['end'] - x['claim']} | {100 * x['end_frac']:.2f} % | {100 * x['overshoot_frac']:.2f} % | "
+        L.append(f"| {x['label']} | {x['seed']} | {x['accepted']} / {x['proposals']} | {pct(x['max_rise'])} | {x['ppl0']:.2f} | "
+                 f"{x['claim']} | {x['end'] - x['claim']} | {100 * x['end_frac']:.2f} % | {100 * x['overshoot_frac']:.2f} % | "
                  + " | ".join(f"{100 * x['est'][c]:+.2f}" for c in CATS) + f" | {x['worst']} |")
-
-    def rng(vals, f):
-        return f"{f(min(vals))} to {f(max(vals))}"
+    L += ["", f"## Perplexity / dense, and a cumulative rule (post hoc: {round(100 * cumulative_tau)} % against the dense model)", "",
+          "The cumulative rule stops before the first checkpoint whose perplexity exceeds the dense model's by more than "
+          f"{round(100 * cumulative_tau)} %. Its stopping checkpoint is also the last one at or below that level in every run "
+          "(checked; the last column).", "",
+          "| model | seed | at the claim | at the first failing checkpoint (position) | at the screen's end | cumulative rule: "
+          "stops at checkpoint | parameters removed | worst category there (estimate, points) | perplexity / dense there "
+          "(next) | last checkpoint <= threshold |", "|---|---|---|---|---|---|---|---|---|---|"]
+    for x in rows:
+        c = x["cumulative"]
+        L.append(f"| {x['label']} | {x['seed']} | {r3(x['ratio_claim'])} | {r3(x['ratio_first_fail'])} ({x['first_fail']}) | "
+                 f"{x['ratio_end']:.3f} | " + ("none | – | – | – | – |" if c is None else
+                 f"{c['position']} | {c['params'] / 1e6:.1f} M ({100 * c['params'] / x['dense']:.2f} %) | {c['worst']} {pts(c['estimate'])} | "
+                 f"{c['ratio']:.3f} ({r3(c['next_ratio'])}) | {'yes' if c['same_as_last_within'] else 'NO'} |"))
     L += ["", "**Ranges quoted in the draft** (computed here; check against the text):", ""]
     for key, lab in (("smollm3-3b", "SmolLM3"), ("granite-3.3-2b", "Granite")):
         xs = [x for x in rows if x["model"] == key]
-        L.append(f"* {lab}: removed at the end {rng([x['end_frac'] for x in xs], lambda v: f'{100 * v:.1f} %')}; per-category "
-                 f"loss at the end {rng([v for x in xs for v in x['est'].values()], lambda v: f'{100 * v:+.1f}')}; worst category: "
-                 f"{', '.join(sorted({x['worst'] for x in xs}))}; perplexity / dense at the end {rng([x['ratio_end'] for x in xs], lambda v: f'{v:.2f}')}; "
-                 f"largest one-step rise {rng([x['max_rise'] for x in xs], lambda v: f'{100 * v:.1f} %')}.")
+        L.append(f"* {lab}: removed at the end {rng([x['end_frac'] for x in xs], pct)}; per-category loss at the end "
+                 f"{rng([v for x in xs for v in x['est'].values()], pts)}; worst category at the end: "
+                 f"{', '.join(sorted({x['worst'] for x in xs}))}; perplexity / dense at the end {rng([x['ratio_end'] for x in xs], lambda v: f'{v:.3f}')}; "
+                 f"largest one-step rise {rng([x['max_rise'] for x in xs], pct)}.")
+    cums = [x["cumulative"] for x in rows if x["cumulative"]]
+    big = sorted(x["max_rise"] for x in rows)
     L.append(f"* All runs: claims at checkpoints {rng([x['claim'] for x in rows], str)}; {rng([x['end'] - x['claim'] for x in rows], str)} "
-             f"steps from claim to the screen's end; overshoot {rng([x['overshoot_frac'] for x in rows], lambda v: f'{100 * v:.1f} %')}; "
-             f"worst-category loss at the end {rng([x['est'][x['worst']] for x in rows], lambda v: f'{100 * v:+.1f}')} points; "
-             f"perplexity / dense at the claim {rng([x['ratio_claim'] for x in rows if x['ratio_claim']], lambda v: f'{v:.3f}')}.")
+             f"steps from claim to the screen's end; overshoot {rng([x['overshoot_frac'] for x in rows], pct)}; worst-category loss at "
+             f"the end {rng([x['est'][x['worst']] for x in rows], pts)} points.")
+    L.append(f"* Largest one-step rise over all runs {pct(big[-1])}; in the other {len(big) - 1} runs at most {pct(big[-2])}.")
+    L.append(f"* Perplexity / dense: at the claims {rng([x['ratio_claim'] for x in rows], lambda v: f'{v:.3f}')}; at the first failing "
+             f"checkpoints {rng([x['ratio_first_fail'] for x in rows], lambda v: f'{v:.3f}')}; at the screen's end "
+             f"{rng([x['ratio_end'] for x in rows], lambda v: f'{v:.3f}')}.")
+    if cums:
+        L.append(f"* Cumulative rule: stops after {rng([c['position'] for c in cums], str)} steps, "
+                 f"{rng([c['params'] for c in cums], lambda v: f'{v / 1e6:.1f} M')} parameters removed; worst-category estimate there "
+                 f"{rng([c['estimate'] for c in cums], pts)} points; same as the last checkpoint at or below the threshold in "
+                 f"{sum(c['same_as_last_within'] for c in cums)} of {len(cums)} runs.")
     return "\n".join(L) + "\n", inputs
 
 
