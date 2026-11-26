@@ -571,22 +571,30 @@ def _figure(res: dict, ad: Path) -> None:
     color = {"mask": "#2a78d6", "comp": "#eb6834"}  # reference palette, slots 1-2 (validated)
     mark = {"mask": "o", "comp": "s"}
     x = [r["params_removed"] / 1e6 for r in res["per_step"]]
-    fig, ax = plt.subplots(figsize=(6.4, 3.8))
-    for lim, lab in ((0.02, "2-point reach limit"), (0.03, "3-point confirmation limit")):
-        ax.axhline(100 * lim, color="#52514e", lw=0.8, ls=(0, (4, 3)) if lim == 0.02 else (0, (1, 2)))
-        ax.annotate(lab, (x[-1], 100 * lim), xytext=(0, 3), textcoords="offset points", ha="right", fontsize=7, color="#52514e")
-    for op in OPS:
-        y = [100 * w for w in res["worst"][op]]
-        R = res["R_mask"] if op == "mask" else res["R_comp"]
-        ax.plot(x, y, color=color[op], marker=mark[op], ms=3.5, lw=1.5, label=f"{OP_LABEL[op]} (reach {R} steps)")
-    ax.axhline(0, color="#c3c2b7", lw=0.6)
-    ax.set_xlabel("parameters removed (M)")
-    ax.set_ylabel("worst-category paired loss (points)")
-    ax.grid(color="#e1e0d9", lw=0.5)
-    for s in ("top", "right"):
-        ax.spines[s].set_visible(False)
-    ax.legend(frameon=False, fontsize=7.5)
-    ax.set_title(f"EXPLORATORY, Qwen3-1.7B, seen items: verdict {res['verdict']}", fontsize=8.5)
+    fig, axes = plt.subplots(1, 2, figsize=(7.6, 3.6), gridspec_kw={"width_ratios": [1.25, 1]})
+    zoom_n = min(20, len(x))
+    for k, ax in enumerate(axes):
+        n = len(x) if k == 0 else zoom_n
+        for lim, style in ((0.02, (0, (4, 3))), (0.03, (0, (1, 2)))):
+            ax.axhline(100 * lim, color="#52514e", lw=0.8, ls=style)
+        for op in OPS:
+            y = [100 * w for w in res["worst"][op]][:n]
+            R = res["R_mask"] if op == "mask" else res["R_comp"]
+            ax.plot(x[:n], y, color=color[op], marker=mark[op], ms=3.5 if k == 0 else 4.5, lw=1.5,
+                    label=f"{OP_LABEL[op]} (reach {R} steps)")
+        ax.axhline(0, color="#c3c2b7", lw=0.6)
+        ax.set_xlabel("parameters removed (M)")
+        ax.grid(color="#e1e0d9", lw=0.5)
+        for sp in ("top", "right"):
+            ax.spines[sp].set_visible(False)
+    axes[0].set_ylabel("worst-category paired loss (points)")
+    axes[0].legend(frameon=False, fontsize=7.5, loc="upper left")
+    axes[0].set_title("all steps", fontsize=8.5)
+    axes[1].set_ylim(-0.5, 8)
+    axes[1].set_title(f"steps 1-{zoom_n} (zoom)", fontsize=8.5)
+    axes[1].text(x[0], 3.12, "3-point confirmation limit", fontsize=7, color="#52514e", va="bottom")
+    axes[1].text(x[0], 1.88, "2-point reach limit", fontsize=7, color="#52514e", va="top")
+    fig.suptitle(f"EXPLORATORY, Qwen3-1.7B, seen items: worst-category loss per step; verdict {res['verdict']}", fontsize=8.5)
     fig.tight_layout()
     for ext in ("png", "pdf"):
         fig.savefig(ad / f"worst_loss.{ext}", dpi=220, bbox_inches="tight", metadata={"CreationDate": None} if ext == "pdf" else {})
