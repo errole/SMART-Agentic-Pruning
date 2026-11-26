@@ -313,7 +313,18 @@ def _bound_dev(root: Path, folder: str) -> list[str]:
     return out
 
 
-EXTRACTORS = {"confirmatory": _confirmatory, "confirmatory_study": _confirmatory_study, "exploratory": _exploratory, "bound_dev": _bound_dev, "kl_probe_smoke": _kl_probe_smoke, "population_regate": _population_regate, "pool_signals": _pool_signals, "screen_confirm": _screen_confirm,
+def _compensation(root: Path, folder: str) -> list[str]:
+    A = _opt(root / folder / "analysis" / "analysis.json")
+    D = _opt(root / folder / "eval" / "mask_decision.json")
+    out = ["EXPLORATORY (development model Qwen3-1.7B; seen items)"]
+    if D:
+        out.append(f"mask-only reach R_mask = {D['R_mask']} steps (L = {D['L']}; extended: {D['extend']})")
+    if A:
+        out.append(f"compensated reach R_comp = {A['R_comp']}; verdict {A['verdict']} (GO: R_comp >= 2 R_mask and +5; NO-GO: < 1.5 R_mask)")
+    return out
+
+
+EXTRACTORS = {"confirmatory": _confirmatory, "confirmatory_study": _confirmatory_study, "exploratory": _exploratory, "bound_dev": _bound_dev, "compensation": _compensation, "kl_probe_smoke": _kl_probe_smoke, "population_regate": _population_regate, "pool_signals": _pool_signals, "screen_confirm": _screen_confirm,
               "matched_signals": _matched_signals, "matched_signals_ordinary": _matched_signals_ordinary, "search_runs": _search_runs, "ranked_run": _ranked_run, "boundary": _boundary, "compare": _compare,
               "ranker": _ranker, "fixed_state": _fixed_state, "gap": _gap, "adaptive_replay": _adaptive_replay,
               "gate_design": _gate_design}
