@@ -201,6 +201,14 @@ experiments:
     docs: docs/compensation_feasibility_report.md
     extractor: compensation
     label: exploratory (development model, seen items; plan e9a61d2 committed before any model was scored)
+  - id: unstructured-feasibility
+    title: "EXPLORATORY: does uniform one-shot unstructured Wanda keep every category within 2 points to a much higher compression than channel removal? (Qwen3-1.7B, Qwen3-8B)"
+    folder: unstructured-feasibility
+    configs: [configs/unstructured_feasibility.yaml, configs/confirmatory_qwen3_8b.yaml, docs/unstructured_feasibility_plan.md]
+    reports: [unstructured-feasibility/analysis/analysis.md, confirmatory/qwen3-8b/registration.md]
+    docs: docs/unstructured_feasibility_report.md
+    extractor: unstructured
+    label: exploratory (Qwen3-1.7B seen items; Qwen3-8B screening pool, sealed first; plan 805b7a5 committed before any model was scored)
   - id: kl-probe-smoke-qwen
     title: "GPU smoke test of the amendment-2 proposer (KL probe after a rank-1 rejection, counterfactual log) on Qwen3-1.7B"
     folder: _smoke/kl-probe-qwen
