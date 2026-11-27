@@ -1,0 +1,77 @@
+# Unstructured feasibility: EXPLORATORY (docs/unstructured_feasibility_plan.md). Does uniform one-shot unstructured
+# Wanda (the published definition) keep per-category accuracy to a much higher compression than MLP-channel removal?
+# Qwen3-1.7B (development model; the compensation experiment's evaluation set) and Qwen3-8B (sealed with the
+# confirmatory procedure, configs/confirmatory_qwen3_8b.yaml; evaluation set from its screening pool only).
+#
+#   python -m capprune unstructured attainability --config configs/unstructured_feasibility.yaml                 # CPU
+#   python -m capprune unstructured models        --config configs/unstructured_feasibility.yaml --model qwen3-8b   # hashes + bf16 load
+#   python -m capprune confirmatory admissibility --config configs/confirmatory_qwen3_8b.yaml                   # FIRST scoring of 8B
+#   python -m capprune unstructured build-eval    --config configs/unstructured_feasibility.yaml --model qwen3-1.7b
+#   python -m capprune unstructured build-eval    --config configs/unstructured_feasibility.yaml --model qwen3-8b
+#   python -m capprune unstructured run           --config configs/unstructured_feasibility.yaml --model qwen3-1.7b
+#   python -m capprune unstructured run           --config configs/unstructured_feasibility.yaml --model qwen3-8b
+#   python -m capprune unstructured analyze       --config configs/unstructured_feasibility.yaml
+extends: base.yaml
+
+pruning:
+  mode: unstructured
+  eligible: [q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj]   # every linear of every block
+  unstructured_count: floor      # published Wanda: int(columns x sparsity) weights pruned per output row
+
+testing: {shots: 0, max_batch_tokens: 32768}
+
+unstructured:
+  out_dir: ~/cap-prune-runs/unstructured-feasibility
+  levels: [0.05, 0.10, 0.15, 0.20, 0.25, 0.30, 0.35, 0.40, 0.43, 0.45, 0.50]   # layer sparsity, each one-shot from dense
+  base_paper_level: 0.43         # "uniform Wanda at the same overall sparsity, not their method"
+  calibration: {seed: 0, windows: 128, batch_size: 4}   # PreparedData.calibration_indices(0, 128) of the C4-train pool
+  regeneration_check: [0.05]     # these levels' masks are generated twice before scoring; the hashes must agree
+  reach_limit: 0.02              # 2.0 points, worst category, point estimate
+  rule:                          # on Qwen3-8B; reach as the zeroed share of ALL model parameters
+    model: qwen3-8b
+    go_min_share: 0.20           # GO: reach >= 20 %
+    nogo_below_share: 0.10       # NO-GO: reach < 10 %; between: INCONCLUSIVE (the user decides)
+  confirmation_rule: {alpha: 0.05, tolerance: 0.03}   # "not a certificate"
+  eval: {batch: 100, order_seed: 2026}
+  base_paper:
+    source: "Kodathala & Vunnam (2026), arXiv 2601.09694"
+    model: Qwen3-8B
+    sparsity: 0.4302
+    mmlu_dense: 77.38
+    mmlu_pruned: 56.67
+    shots: 5
+  channel_reference: ~/cap-prune-runs/compensation-feasibility/analysis/analysis.json
+  allowed_models: [Qwen/Qwen3-1.7B, Qwen/Qwen3-8B]
+  models:
+    qwen3-1.7b:
+      label: Qwen3-1.7B (development model)
+      model: {name_or_path: Qwen/Qwen3-1.7B, revision: 70d244cc86ccca08cf5af4e1e306ecf908b1ad5e}   # the only revision ever used
+      data_dir: ~/cap-prune-runs/data
+      tokenizer_id: Qwen/Qwen3-1.7B@main           # the prepared data's tokenizer id (the same snapshot)
+      model_files:
+        model-00001-of-00002.safetensors: 169ad53ec313c3a34b06c0809216e4fc072cce444a5d4ff2b59690d064130ed5
+        model-00002-of-00002.safetensors: 912becff8d60672aa8628ef08c05898d9adf17c2ad4ae3caf99b065622fdeff9
+      eval:
+        kind: fixed                                 # the compensation-feasibility evaluation set, reused as is
+        dir: ~/cap-prune-runs/compensation-feasibility/eval
+        qid_sha256: 7b7e7514e13164d2b6d8a439552bc30c99d215005de972991ac56abdce8a3d48
+        items_file_sha256: a19ab049fc409afe400107eca0155e85896a7ff5f283d03d1aa7d356d156e179
+        dense_crosscheck: ~/cap-prune-runs/compensation-feasibility/eval/mask.outcomes.npz
+    qwen3-8b:
+      label: Qwen3-8B
+      model: {name_or_path: Qwen/Qwen3-8B, revision: b968826d9c46dd6066d109eabc6255188de91218}
+      data_dir: ~/cap-prune-runs/data-qwen3-8b
+      tokenizer_id: Qwen/Qwen3-8B@b968826d9c46dd6066d109eabc6255188de91218
+      licence: Apache-2.0
+      model_files:
+        model-00001-of-00005.safetensors: 31d6a825ae35f11fb85b195b4c42c146c051e446433125a215336abdf95cbf5f
+        model-00002-of-00005.safetensors: 5991236cea6fe21f3d43cab0f0e84448734fbbe0789816202989f2ddc9d18282
+        model-00003-of-00005.safetensors: c5185c4794be2d8a9784d5753c9922db38df478ce11f9ed0b415b7304d896836
+        model-00004-of-00005.safetensors: b5ee7de71fbf17db3d5704e0c8f2bc7d005ca9e1d7ca2aeb19827b0cfcaa917a
+        model-00005-of-00005.safetensors: 20c2d6366ab85c90786ccdd829cd2b9e7d30ef3b2ebbb998280e7e4014b542ff
+      eval:
+        kind: screening_pool                        # drawn from the screening pool only, after admissibility
+        sealed_dir: ~/cap-prune-runs/confirmatory/qwen3-8b   # registration.json and admissibility.json are read; sealed/ never
+        registration_sha256: f96e8ef2739c316cba0c16626043d4f612e4d77106ac5074d32b8a68e4820a48
+        per_category: 3000                          # 3,000 where the pool has them, every item otherwise (user, 2026-11-27)
+        seed: 20261127                              # per category: default_rng([seed, crc32(category)]) on qid-sorted items

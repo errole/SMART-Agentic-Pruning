@@ -35,10 +35,20 @@ def channel_scores(u: Unit, down_in_sqnorm: torch.Tensor, mask: torch.Tensor) ->
     return s.masked_fill(~mask, -1.0)
 
 
+def unstructured_count(cols: int, ratio: float, count: str = "round") -> int:
+    """Weights pruned per output row. ``floor`` is the published Wanda count, ``int(W.shape[1] * sparsity_ratio)``
+    (locuslab/wanda, lib/prune.py, prune_wanda); ``round`` (the default) is this repository's original rule."""
+    if count == "floor":
+        return int(cols * ratio)
+    if count == "round":
+        return int(round(ratio * cols))
+    raise ValueError(f"pruning.unstructured_count must be round|floor, got {count!r}")
+
+
 @torch.no_grad()
-def unstructured_mask(score: torch.Tensor, ratio: float) -> torch.Tensor:
+def unstructured_mask(score: torch.Tensor, ratio: float, count: str = "round") -> torch.Tensor:
     rows, cols = score.shape
-    k = int(round(ratio * cols))
+    k = unstructured_count(cols, ratio, count)
     mask = torch.ones_like(score, dtype=torch.bool)
     if k <= 0:
         return mask
@@ -85,7 +95,8 @@ def raise_unit(state: PruneState, name: str, new_ratio: float, act: dict[str, to
     pcfg = cfg["pruning"]
     if mode == "unstructured":
         r = min(new_ratio, float(pcfg.get("max_unit_sparsity", 0.9)))
-        new = unstructured_mask(linear_scores(u.weight, act[name], old), r) & old
+        new = unstructured_mask(linear_scores(u.weight, act[name], old), r,
+                                str(pcfg.get("unstructured_count", "round"))) & old
     elif mode == "nm":
         if (~old).any():  # already N:M - cannot go further without breaking the pattern
             return False

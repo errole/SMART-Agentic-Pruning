@@ -31,6 +31,8 @@
                     report | study (both models: primary, C1, C4, C6, S1-S4)
   matched-signals   equal-size actions of stall / ranker parents: KL vs. net flip as choice signals: register | score | analyze |
                     compare | after-rejection, tv-posthoc (post hoc)
+  unstructured      EXPLORATORY uniform unstructured Wanda on Qwen3-1.7B and Qwen3-8B: attainability | models |
+                    build-eval | run | analyze
   results-index     one index of every experiment: configs, code hashes, commit, reports, headline numbers
   backup            zip the runs root with a per-file SHA-256 manifest and copy it to verified destinations
                     (the live run itself: `supervise` with a `kind: ranked_search` method)
@@ -456,6 +458,23 @@ def cmd_compensation(args) -> int:
     return 0
 
 
+def cmd_unstructured(args) -> int:
+    from . import unstructured_feasibility as uf
+    from .utils.log import setup_logging
+
+    setup_logging()
+    cfg = _cfg(args)
+    if args.phase in ("models", "build-eval", "run") and not args.model:
+        raise SystemExit(f"unstructured {args.phase} needs --model")
+    p = {"attainability": lambda: uf.attainability(cfg), "models": lambda: uf.models(cfg, args.model),
+         "build-eval": lambda: uf.build_eval(cfg, args.model), "run": lambda: uf.run(cfg, args.model),
+         "analyze": lambda: uf.analyze(cfg)}[args.phase]()
+    if p.suffix == ".md":
+        print(p.read_text(encoding="utf-8"))
+    print(f"\nwritten: {p}")
+    return 0
+
+
 def cmd_paper_a(args) -> int:
     from .paper_a import build
 
@@ -594,6 +613,11 @@ def main(argv=None) -> int:
     p.add_argument("phase", choices=["reference", "build-eval", "score", "compensate", "analyze"])
     p.add_argument("--operator", choices=["mask", "comp"])
     p.set_defaults(fn=cmd_compensation)
+    p = sub.add_parser("unstructured", help="EXPLORATORY: uniform unstructured Wanda feasibility, Qwen3-1.7B and Qwen3-8B "
+                                            "(docs/unstructured_feasibility_plan.md)"); common(p)
+    p.add_argument("phase", choices=["attainability", "models", "build-eval", "run", "analyze"])
+    p.add_argument("--model", choices=["qwen3-1.7b", "qwen3-8b"])
+    p.set_defaults(fn=cmd_unstructured)
     p = sub.add_parser("paper-a", help="paper A figures and tables from run files (matplotlib)"); common(p)
     p.add_argument("--out", default="docs/paper/workshop")
     p.set_defaults(fn=cmd_paper_a)
