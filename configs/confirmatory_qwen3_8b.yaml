@@ -1,0 +1,47 @@
+# Qwen3-8B, sealed with the confirmatory procedure (confirmatory.yaml) for the EXPLORATORY unstructured feasibility
+# experiment (docs/unstructured_feasibility_plan.md), so that the model stays eligible for a later confirmatory study.
+# Qwen/Qwen3-8B is the same variant as the development model Qwen/Qwen3-1.7B (the post-trained release, not -Base).
+# Licence: Apache-2.0 (LICENSE in the pinned snapshot, sha256 832dd9e0...); not gated. Same tokenizer files as
+# Qwen3-1.7B @ 70d244cc (tokenizer.json, tokenizer_config.json, vocab.json, merges.txt: identical sha256).
+#
+#   python -m capprune prepare                    --config configs/confirmatory_qwen3_8b.yaml   # tokenized C4 / PPL sets (no scoring)
+#   python -m capprune confirmatory build-data    --config configs/confirmatory_qwen3_8b.yaml   # SEAL, before any scoring
+#   python -m capprune confirmatory admissibility --config configs/confirmatory_qwen3_8b.yaml   # first scoring (gate pool only)
+#
+# This experiment reads the screening pool only. The sealed rows (sealed/confirmation.jsonl) are never opened; the
+# admissibility test's split check reads the sealed id list, as in the confirmatory procedure.
+extends: confirmatory.yaml
+
+model:
+  name_or_path: Qwen/Qwen3-8B
+  revision: b968826d9c46dd6066d109eabc6255188de91218
+
+experiment:
+  runs_dir: ~/cap-prune-runs/confirmatory/qwen3-8b/runs
+  data_dir: ~/cap-prune-runs/data-qwen3-8b
+
+ranker:   # NOT used by the unstructured experiment; set by the confirmatory models' rule (about 0.78 % of MLP channels
+          # per step): 36 layers x 12,288 channels (192 blocks of 64); 4 units x 13 blocks = 3,328 channels = 0.752 %.
+          # A later confirmatory plan fixes the geometry it uses.
+  step_blocks: 52
+  shortlist: {units_per_action: 4, blocks_per_unit: 13, window_starts: [0, 4, 8, 12, 16, 20, 24, 28, 32]}
+
+ranked_search:
+  sealed_confirmation: [~/cap-prune-runs/confirmatory/qwen3-8b/sealed/confirmation_qids.json]
+  split_registration: ~/cap-prune-runs/confirmatory/qwen3-8b/registration.json
+
+gradient_live:
+  method: cap_top1
+  out_dir: ~/cap-prune-runs/confirmatory/qwen3-8b/_analysis
+
+confirmatory:
+  model_key: qwen3-8b
+  out_dir: ~/cap-prune-runs/confirmatory/qwen3-8b
+  plan_file: ../docs/unstructured_feasibility_plan.md   # the plan that governs this model's first scoring (admissibility)
+  split_seed: 2026112701
+  model_files:
+    model-00001-of-00005.safetensors: 31d6a825ae35f11fb85b195b4c42c146c051e446433125a215336abdf95cbf5f
+    model-00002-of-00005.safetensors: 5991236cea6fe21f3d43cab0f0e84448734fbbe0789816202989f2ddc9d18282
+    model-00003-of-00005.safetensors: c5185c4794be2d8a9784d5753c9922db38df478ce11f9ed0b415b7304d896836
+    model-00004-of-00005.safetensors: b5ee7de71fbf17db3d5704e0c8f2bc7d005ca9e1d7ca2aeb19827b0cfcaa917a
+    model-00005-of-00005.safetensors: 20c2d6366ab85c90786ccdd829cd2b9e7d30ef3b2ebbb998280e7e4014b542ff
