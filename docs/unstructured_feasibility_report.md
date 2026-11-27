@@ -332,6 +332,16 @@ far less than the drop they report.
   * No recorded result was changed.
   * Nothing else used the GPU while models were scored: the full test suite finished before the admissibility test,
     and the analysis ran after the last level.
+* **Tests.** The full suite was run at `d77b9f3` three times (`~/cap-prune-runs/_tests/`):
+  * `2026-11-27_d77b9f34e08d`: 193 passed and 1 failed. `test_recovery.py::test_hang_is_detected_and_worker_restarted`
+    hit its 600 s timeout: the injected hang fired, and the supervisor logged no hang detection.
+    * In every earlier record the test takes about 50 s.
+    * It passed alone (57 s) right afterwards.
+    * Not diagnosed. This branch does not touch the supervisor or the runner.
+  * `_r2`: cut off by a power outage, with no result (its `record.json` says so).
+  * `_r3`: **194 passed, exit code 0**; the hang test took 50.8 s.
+* **The power outage** happened after all scoring and the analysis. Afterwards, all 48 run records were re-checked
+  against their recorded SHA-256 and all matched, and `git fsck` was clean.
 * **Disk.** The run files take 36 MB (masks are not stored, only their hashes), the Qwen3-8B seal 7.4 MB, and its
   prepared data 45 MB.
 
