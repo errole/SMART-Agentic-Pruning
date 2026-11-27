@@ -778,9 +778,11 @@ def _figure(res: dict, ad: Path) -> None:
     ax.axhline(0, color="#c3c2b7", lw=0.6, zorder=1)
     cc = res.get("channel_comparison")
     if cc:  # context: the 1.7B channel-removal trajectory (mask-only) of the compensation experiment
+        top = max(100 * t["mask_worst"] for t in cc["steps"])
         ax.plot([100 * t["share"] for t in cc["steps"]], [100 * t["mask_worst"] for t in cc["steps"]], color="#00b894",
                 marker="^", ms=3.5, lw=1.2, zorder=2,
-                label=f"Qwen3-1.7B, MLP-channel removal (compensation experiment; reach {100 * cc['R_mask_share']:.1f} %)")
+                label=f"Qwen3-1.7B, MLP-channel removal (compensation experiment; reach {100 * cc['R_mask_share']:.1f} %; "
+                      f"off the chart above, to +{top:.0f} points)")
     for key, col, mk in series:
         m = res["models"].get(key)
         if not m or not m["levels"]:
@@ -791,15 +793,16 @@ def _figure(res: dict, ad: Path) -> None:
                 label=f"{m['label'].split(' (')[0]}, unstructured Wanda (reach {100 * m['reach_share']:.1f} %)")
     ymax = max([3.5] + [100 * r["worst"] for m in res["models"].values() if m for r in m["levels"]])
     ax.set_ylim(-1.5, min(ymax + 1.0, 40))
-    ax.text(0.3, 2.08, "2-point reach limit", fontsize=7, color=ink2, va="bottom")
-    ax.text(0.3, 3.08, "3-point confirmation tolerance", fontsize=7, color=ink2, va="bottom")
+    tr = ax.get_yaxis_transform()  # x in axes coordinates, y in data: the labels sit in the right margin, off the lines
+    ax.text(1.01, 2.0, "2-point\nreach limit", transform=tr, fontsize=7, color=ink2, va="center", ha="left")
+    ax.text(1.01, 3.0, "3-point\ntolerance", transform=tr, fontsize=7, color=ink2, va="bottom", ha="left")
     ax.set_xlabel("weights zeroed or removed, share of ALL model parameters (%)", color=ink)
     ax.set_ylabel("worst-category paired loss vs dense (points)", color=ink)
     ax.tick_params(colors=ink2, labelsize=8)
     ax.grid(color=grid, lw=0.5)
     for sp in ("top", "right"):
         ax.spines[sp].set_visible(False)
-    ax.legend(frameon=False, fontsize=7.2, loc="upper left", labelcolor=ink)
+    ax.legend(frameon=False, fontsize=7.2, loc="upper center", bbox_to_anchor=(0.5, -0.15), labelcolor=ink)  # below the axes
     ax.set_title(f"EXPLORATORY: worst-category loss against compression; verdict on Qwen3-8B: {res['verdict']}",
                  fontsize=8.5, color=ink)
     fig.tight_layout()
