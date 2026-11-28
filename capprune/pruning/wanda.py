@@ -120,45 +120,80 @@ class _Stop(Exception):
     pass
 
 
+def _nm_selection(state: PruneState, target: float, order: list[str] | None) -> set[str] | None:
+    if state.mode != "nm":
+        return None
+    assert order is not None, "nm Wanda baseline needs a sensitivity order"
+    n, m = state.nm
+    per_unit = 1 - n / m
+    acc, sel = 0.0, set()
+    for name in order:
+        if acc >= target - 1e-9:
+            break
+        sel.add(name)
+        acc += per_unit * state.share(name)
+    return sel
+
+
+def _stat_hooks(units: list[Unit], mode: str, dev) -> tuple[dict[str, torch.Tensor], list]:
+    """Pre-hooks accumulating each unit's per-input-column sum of squared activations (fp32), batch by batch."""
+    sq: dict[str, torch.Tensor] = {}
+    hooks = []
+    for u in units:
+        lin = u.linears["down"] if mode == "structured" else u.linears["w"]
+        sq[u.name] = torch.zeros(lin.weight.shape[1], dtype=torch.float32, device=dev)
+
+        def pre(mod, inp, _n=u.name):
+            x = inp[0]
+            sq[_n] += x.float().pow(2).reshape(-1, x.shape[-1]).sum(0)
+
+        hooks.append(lin.register_forward_pre_hook(pre))
+    return sq, hooks
+
+
+def _raise_layer(state: PruneState, units: list[Unit], sq: dict, target: float, cfg: dict,
+                 nm_selected: set[str] | None) -> None:
+    for u in units:
+        if state.mode == "nm":
+            if u.name in nm_selected:
+                raise_unit(state, u.name, 0.5, sq, cfg)
+        else:
+            raise_unit(state, u.name, target, sq, cfg)
+
+
 @torch.no_grad()
 def sequential_wanda(model, state: PruneState, dense: DenseStore, calib: torch.Tensor, target: float,
-                     cfg: dict, batch_size: int = 4, heartbeat=None, order: list[str] | None = None) -> PruneState:
+                     cfg: dict, batch_size: int = 4, heartbeat=None, order: list[str] | None = None,
+                     cache_inputs: bool = False, offload_masks: bool = False) -> PruneState:
     """Original Wanda: layer by layer, statistics gathered with earlier layers already pruned.
 
     ``order`` (nm mode only): units sorted from least to most sensitive; units are
     converted to N:M in that order until the global target is reached.
+
+    ``cache_inputs=False`` (the default, the original code path): for every layer, the calibration batches run
+    through the model from the embeddings, with the earlier layers already pruned, and stop after that layer
+    (quadratic in depth). ``cache_inputs=True``: each batch's input to the first layer is captured once, and
+    each layer's (pruned) output becomes the next layer's input, as in the published Wanda code
+    (locuslab/wanda, ``prepare_calibration_input``). Same batches, same layer calls, same keyword arguments:
+    the masks are identical (checked against the feasibility run's hashes, docs/study2_groundwork.md).
+
+    ``offload_masks`` (cached path only): each layer's keep-masks move to the CPU once applied, so one bool
+    mask set (one byte per prunable weight) is never resident on the GPU.
     """
+    if cache_inputs:
+        return _sequential_wanda_cached(model, state, dense, calib, target, cfg, batch_size, heartbeat, order,
+                                        offload_masks)
     layers = decoder_layers(model)
     dev = next(model.parameters()).device
     by_layer: dict[int, list[Unit]] = {}
     for u in state.units:
         by_layer.setdefault(u.layer, []).append(u)
-    nm_selected: set[str] | None = None
-    if state.mode == "nm":
-        assert order is not None, "nm Wanda baseline needs a sensitivity order"
-        n, m = state.nm
-        per_unit = 1 - n / m
-        acc, nm_selected = 0.0, set()
-        for name in order:
-            if acc >= target - 1e-9:
-                break
-            nm_selected.add(name)
-            acc += per_unit * state.share(name)
+    nm_selected = _nm_selection(state, target, order)
     for li, layer in enumerate(layers):
         units = by_layer.get(li, [])
         if not units:
             continue
-        sq: dict[str, torch.Tensor] = {}
-        hooks = []
-        for u in units:
-            lin = u.linears["down"] if state.mode == "structured" else u.linears["w"]
-            sq[u.name] = torch.zeros(lin.weight.shape[1], dtype=torch.float32, device=dev)
-
-            def pre(mod, inp, _n=u.name):
-                x = inp[0]
-                sq[_n] += x.float().pow(2).reshape(-1, x.shape[-1]).sum(0)
-
-            hooks.append(lin.register_forward_pre_hook(pre))
+        sq, hooks = _stat_hooks(units, state.mode, dev)
 
         def stop(mod, inp, out):
             raise _Stop
@@ -175,11 +210,78 @@ def sequential_wanda(model, state: PruneState, dense: DenseStore, calib: torch.T
         finally:
             for h in hooks:
                 h.remove()
-        for u in units:
-            if state.mode == "nm":
-                if u.name in nm_selected:
-                    raise_unit(state, u.name, 0.5, sq, cfg)
-            else:
-                raise_unit(state, u.name, target, sq, cfg)
+        _raise_layer(state, units, sq, target, cfg, nm_selected)
         state.apply(dense, only=[u.name for u in units])
+    return state
+
+
+@torch.no_grad()
+def capture_layer_inputs(model, calib: torch.Tensor, batch_size: int) -> list[tuple[torch.Tensor, dict]]:
+    """Per calibration batch: the hidden states entering the first decoder layer and the keyword arguments the
+    model passes to it (attention mask, position embeddings, position ids, ...). The forward stops there."""
+    layers = decoder_layers(model)
+    types = getattr(model.config, "layer_types", None)
+    if types is not None and len(set(types[: len(layers)])) > 1:
+        raise NotImplementedError("cached Wanda needs every layer to receive the same attention mask "
+                                  f"(layer types {sorted(set(types))})")
+    dev = next(model.parameters()).device
+    got: list[tuple[torch.Tensor, dict]] = []
+
+    def pre(mod, args, kwargs):
+        if len(args) != 1:
+            raise RuntimeError(f"unexpected positional arguments to the decoder layer: {len(args)}")
+        got.append((args[0], dict(kwargs)))
+        raise _Stop
+
+    h = layers[0].register_forward_pre_hook(pre, with_kwargs=True)
+    try:
+        for i in range(0, calib.shape[0], batch_size):
+            try:
+                model(input_ids=calib[i : i + batch_size].to(dev), use_cache=False)
+            except _Stop:
+                pass
+    finally:
+        h.remove()
+    return got
+
+
+@torch.no_grad()
+def _sequential_wanda_cached(model, state: PruneState, dense: DenseStore, calib: torch.Tensor, target: float,
+                             cfg: dict, batch_size: int, heartbeat, order, offload_masks: bool) -> PruneState:
+    layers = decoder_layers(model)
+    dev = next(model.parameters()).device
+    by_layer: dict[int, list[Unit]] = {}
+    for u in state.units:
+        by_layer.setdefault(u.layer, []).append(u)
+    nm_selected = _nm_selection(state, target, order)
+    last = max(by_layer) if by_layer else -1
+    cached = capture_layer_inputs(model, calib, batch_size)
+    xs = [x for x, _ in cached]
+    kws = [k for _, k in cached]
+    del cached
+    for li, layer in enumerate(layers):
+        if li > last:
+            break
+        units = by_layer.get(li, [])
+        if units:
+            for u in units:  # the unit's mask is on the GPU while it is raised and applied
+                state.masks[u.name] = state.masks[u.name].to(dev)
+            sq, hooks = _stat_hooks(units, state.mode, dev)
+            try:
+                for b, x in enumerate(xs):
+                    layer(x, **kws[b])
+                    if heartbeat:
+                        heartbeat.beat("wanda", f"layer {li} batch {b * batch_size}")
+            finally:
+                for h in hooks:
+                    h.remove()
+            _raise_layer(state, units, sq, target, cfg, nm_selected)
+            state.apply(dense, only=[u.name for u in units])
+            if offload_masks:
+                for u in units:
+                    state.masks[u.name] = state.masks[u.name].to("cpu")
+        if li < last:  # this layer's output with its pruned weights is the next layer's input
+            for b in range(len(xs)):
+                out = layer(xs[b], **kws[b])
+                xs[b] = out[0] if isinstance(out, tuple) else out
     return state

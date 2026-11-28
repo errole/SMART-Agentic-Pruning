@@ -33,15 +33,39 @@ class DenseStore:
         return sum(t.numel() * t.element_size() for t in self.w.values())
 
 
+class LiveDenseStore:
+    """The dense weights ARE the live weights, for one-shot pruning from a freshly restored dense model (one resident
+    copy; ``pruning/reload.py``). Valid only while a unit has not been applied since the last ``reset``, so a second
+    read of the same unit is refused."""
+
+    def __init__(self, units: list[Unit]):
+        self.by_name = {u.name: u for u in units}
+        self.used: set[tuple[str, str]] = set()
+
+    def reset(self) -> None:
+        self.used.clear()
+
+    def get(self, unit: str, part: str) -> torch.Tensor:
+        if (unit, part) in self.used:
+            raise RuntimeError(f"{unit}.{part} was already pruned since the dense weights were restored")
+        self.used.add((unit, part))
+        return self.by_name[unit].linears[part].weight.detach()
+
+    def nbytes(self) -> int:
+        return 0
+
+
 class PruneState:
-    def __init__(self, units: list[Unit], mode: str, nm: tuple[int, int] = (2, 4)):
+    def __init__(self, units: list[Unit], mode: str, nm: tuple[int, int] = (2, 4), mask_device=None):
+        """``mask_device``: where the keep-masks are created (default: each unit's weight device). ``"cpu"`` with
+        ``sequential_wanda(..., cache_inputs=True, offload_masks=True)`` keeps the masks off the GPU."""
         self.units = units
         self.by_name = {u.name: u for u in units}
         self.mode = mode
         self.nm = nm
         self.masks: dict[str, torch.Tensor] = {}
         for u in units:
-            dev = next(iter(u.linears.values())).weight.device
+            dev = mask_device if mask_device is not None else next(iter(u.linears.values())).weight.device
             shape = (u.channels,) if mode == "structured" else tuple(u.weight.shape)
             self.masks[u.name] = torch.ones(shape, dtype=torch.bool, device=dev)
         self.total_eligible = sum(u.numel for u in units)

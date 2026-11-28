@@ -202,22 +202,26 @@ class Heartbeat:
     def __init__(self, run_dir: str | os.PathLike, min_interval_s: float = 5.0):
         self.path = Path(run_dir) / "heartbeat.json"
         self.min_interval = min_interval_s
-        self._last = 0.0
+        self._last: float | None = None  # monotonic: a step of the wall clock must not silence the heartbeat
         self.phase = "start"
         self.started = time.time()
+        self.launch = os.environ.get("CAPPRUNE_LAUNCH_ID")  # set by the supervisor for the worker it launched
+        self.seq = 0
 
     def beat(self, phase: str | None = None, detail: str = "", force: bool = False) -> None:
-        now = time.time()
+        mono = time.monotonic()
         if phase is not None and phase != self.phase:
             self.phase = phase
             force = True
-        if not force and now - self._last < self.min_interval:
+        if not force and self._last is not None and mono - self._last < self.min_interval:
             return
-        self._last = now
+        self._last = mono
+        self.seq += 1
         try:
             atomic_write_json(
                 self.path,
-                {"pid": os.getpid(), "ts": now, "phase": self.phase, "detail": detail, "started": self.started},
+                {"pid": os.getpid(), "ts": time.time(), "phase": self.phase, "detail": detail, "started": self.started,
+                 "launch": self.launch, "seq": self.seq},
                 indent=None,
             )
         except OSError:

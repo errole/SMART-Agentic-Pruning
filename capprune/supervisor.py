@@ -5,7 +5,9 @@ a hard crash - segfault, CUDA driver reset, OOM-killer, a hung kernel - only
 kills the child.  The supervisor then:
 
 * detects hangs: no heartbeat progress for ``hang_timeout_s`` -> graceful stop,
-  then kill, then restart;
+  then kill, then restart. Progress is a change in the worker's heartbeat file,
+  timed on the supervisor's monotonic clock: a step of the system clock (an NTP
+  correction) neither hides a hang nor kills a healthy worker;
 * restarts crashed runs with exponential backoff; the restart budget
   (``max_restarts``) only counts crashes with NO checkpoint progress, so a
   run that keeps advancing between crashes is never abandoned;
@@ -26,6 +28,7 @@ import signal
 import subprocess
 import sys
 import time
+import uuid
 from pathlib import Path
 
 from .config import run_id, runs_dir
@@ -45,6 +48,23 @@ def heartbeat_ts(hb: dict, pid: int, started: float) -> float:
     if hb.get("pid") == pid or float(hb.get("started", 0.0)) >= started - 5.0:
         return float(hb["ts"])
     return 0.0
+
+
+def heartbeat_signature(hb: dict, pid: int, started: float, launch: str | None) -> tuple | None:
+    """What identifies one write of THIS worker's heartbeat, or None if the heartbeat is not this worker's.
+
+    A worker launched by this supervisor carries the launch token in its heartbeat (``CAPPRUNE_LAUNCH_ID``), so the
+    match needs no clock: a token of another launch is never this worker's. A heartbeat without a token (a worker
+    from older code) falls back to ``heartbeat_ts``. The supervisor treats any change of the signature as progress
+    and times the absence of change on its own monotonic clock; the wall-clock ``ts`` is never subtracted from the
+    supervisor's clock (docs/study2_groundwork.md, P3: a -5 h NTP step hid a hang for the size of the step)."""
+    tok = hb.get("launch")
+    if tok is not None:
+        if launch is None or tok != launch:
+            return None
+    elif heartbeat_ts(hb, pid, started) == 0.0:
+        return None
+    return (hb.get("seq"), hb.get("ts"), hb.get("phase"), hb.get("detail"), hb.get("pid"))
 
 
 def build_plan(cfg: dict, methods=None, targets=None, seeds=None) -> list[dict]:
@@ -105,6 +125,8 @@ class Supervisor:
         self.grace = float(r.get("stop_grace_s", 120))
         self.ledger = Ledger(self.root)
         self._child: subprocess.Popen | None = None
+        self._clock = time.monotonic  # every interval the supervisor times (hang timer, backoff sleeps)
+        self._poll_s = 5.0
 
     # ------------------------------------------------------------------ child management
     def _cmd(self, item: dict) -> list[str]:
@@ -118,7 +140,8 @@ class Supervisor:
         logdir = self.root / item["id"] / "logs"
         logdir.mkdir(parents=True, exist_ok=True)
         logf = open(logdir / f"attempt-{attempt:02d}.log", "a", encoding="utf-8")
-        env = {**os.environ, "PYTHONUNBUFFERED": "1"}
+        launch = uuid.uuid4().hex
+        env = {**os.environ, "PYTHONUNBUFFERED": "1", "CAPPRUNE_LAUNCH_ID": launch}
         kw: dict = {"stdout": logf, "stderr": subprocess.STDOUT, "env": env}
         if os.name == "nt":
             kw["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
@@ -126,6 +149,7 @@ class Supervisor:
             kw["start_new_session"] = True
         p = subprocess.Popen(self._cmd(item), **kw)
         p._capprune_log = logf  # type: ignore[attr-defined]
+        p._capprune_launch = launch  # type: ignore[attr-defined]
         return p
 
     def _stop_child(self, p: subprocess.Popen, grace: float) -> None:
@@ -153,31 +177,36 @@ class Supervisor:
 
     def _watch(self, item: dict, p: subprocess.Popen) -> int:
         hb_path = self.root / item["id"] / "heartbeat.json"
-        started = time.time()
+        started = time.time()  # wall clock: only to match heartbeats of workers without a launch token
+        launch = getattr(p, "_capprune_launch", None)
+        last_progress = self._clock()  # monotonic: the hang timer never reads the wall clock
+        seen = None
         while True:
             try:
-                return p.wait(timeout=5)
+                return p.wait(timeout=self._poll_s)
             except subprocess.TimeoutExpired:
                 pass
             if rt.stop_requested():
                 log.warning("stop requested: asking worker %d to checkpoint and exit", p.pid)
                 self._stop_child(p, self.grace)
                 return p.returncode
-            last = started
             try:
-                last = max(last, heartbeat_ts(read_json(hb_path), p.pid, started))
+                sig = heartbeat_signature(read_json(hb_path), p.pid, started, launch)
             except Exception:
-                pass
-            if time.time() - last > self.hang_timeout:
-                log.error("%s: no heartbeat for %.0fs (worker %d hung?) - restarting it", item["id"],
-                          time.time() - last, p.pid)
+                sig = None
+            if sig is not None and sig != seen:
+                seen, last_progress = sig, self._clock()
+            idle = self._clock() - last_progress
+            if idle > self.hang_timeout:
+                log.error("%s: no heartbeat progress for %.0fs (worker %d hung?) - restarting it", item["id"],
+                          idle, p.pid)
                 self._stop_child(p, min(self.grace, 60))
                 return 124
 
     def _sleep(self, seconds: float) -> None:
-        end = time.time() + seconds
-        while time.time() < end and not rt.stop_requested():
-            time.sleep(min(2.0, end - time.time()))
+        end = self._clock() + seconds
+        while self._clock() < end and not rt.stop_requested():
+            time.sleep(max(0.0, min(2.0, end - self._clock())))
 
     def _progress(self, rid: str) -> int:
         """Highest checkpoint number on disk - grows whenever the worker makes durable progress."""
