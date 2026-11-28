@@ -8,7 +8,9 @@ inversion of the test; only the test is needed for certification.
 * ``cp_union``: the pre-registered reference, cp_upper(lost, n, alpha/2) - cp_lower(gained, n, alpha/2) <= tol.
 * ``exact_score``: an exact unconditional test on the trinomial (lost, agree, gained): the restricted-MLE score
   statistic for the paired difference (Nam 1997; Tango 1998), with the critical value taken as the supremum of the
-  exact null distribution over the nuisance parameter on the boundary Delta = tol (Sidik 2003).
+  exact null distribution over the nuisance parameter on the boundary Delta = tol (Sidik 2003). v1 (the 400-point
+  grid, used by bound-dev's recorded results) is exact only up to its grid; v2 (``exact_score_critical_v2``, the
+  registered fix of 2026-11-27) refines the grid and proves the size <= alpha at every nuisance value.
 * ``betting``: a one-sided betting confidence sequence for a bounded mean (Waudby-Smith & Ramdas 2024), on the paired
   differences X = lost - gained in [-1, 1], predictable plug-in bets, certified if the capital ever reaches 1/alpha.
 * ``normal``: the Wald bound d + z sqrt(v / n), for reference only (not finite-sample valid; cannot be adopted).
@@ -169,6 +171,172 @@ def exact_score_critical(n: int, tol: float, alpha: float, points: int = 400) ->
 
 def exact_score_region(n: int, kp, km, alpha: float, tol: float) -> np.ndarray:
     return score_z(n, kp, km, tol) <= exact_score_critical(n, float(tol), float(alpha))
+
+
+# ============================================================================ (ii) v2: the registered grid fix
+# docs/bound_development_plan.md, section 8, note of 2026-11-27. The v1 critical value above (400-point grid) is kept
+# unchanged: bound-dev's recorded results were computed with it.
+V2_EXTRA_Q = (0.04, 0.06, 0.07, 0.08, 0.09, 0.10, 0.12, 0.15)
+V2_PER_UNIT = 8            # uniform grid spacing 1 / (8 n) in p_gained, added to the v1 grid
+V2_MARGIN = 1e-4           # z* keeps the grid supremum of the size at or below alpha - 1e-4
+V2_WINDOW_SLACK = 1e-12    # bound on the trinomial mass outside the +-9 sd windows (< 1e-15), with room
+
+
+def nuisance_grid_v2(n: int, tol: float, per_unit: int = V2_PER_UNIT) -> np.ndarray:
+    """The v1 grid plus a uniform grid of spacing 1/(per_unit n) over [0, (1 - tol)/2), both ends included."""
+    top = (1 - tol) / 2 * (1 - 1e-9)
+    m = int(math.ceil(top * per_unit * n)) + 1
+    return np.unique(np.concatenate([nuisance_grid(tol, 400, extra_q=V2_EXTRA_Q), np.linspace(0.0, top, m)]))
+
+
+def _cells(n: int, tol: float, g: float) -> tuple[np.ndarray, np.ndarray]:
+    """(Z, probability) of every retained cell on the boundary point p_gained = g."""
+    pl, pg = g + tol, g
+    kp, km = _grid(n, pl, pg)
+    keep = kp - km < n * tol  # Z < 0 exactly when d < tol: the cells that can ever be in the rejection region
+    kp, km = kp[keep], km[keep]
+    return score_z(n, kp, km, tol), np.exp(trinomial_logpmf(n, kp, km, pl, pg))
+
+
+def size_point(n: int, tol: float, z_crit: float, g: float) -> float:
+    """Exact P(Z <= z_crit) at the boundary point p_gained = g (all but < 1e-15 of the mass)."""
+    z, w = _cells(n, tol, float(g))
+    return float(w[z <= z_crit].sum())
+
+
+def fisher_slope_bound(n: int, tol: float, a: float, b: float) -> float:
+    """An upper bound on |dS/dg| over [a, b] for S(g) = P_g(R), any fixed region R, on the boundary
+    (p_lost, p_gained, p_agree) = (g + tol, g, 1 - tol - 2g). S' = Cov(U, 1_R) with U the score of g, so
+    |S'| <= sqrt(n I(g) / 4), I(g) = 1/(g + tol) + 1/g + 4/(1 - tol - 2g); and |S'| <= E|U| <= 4n everywhere."""
+    pa = 1 - tol - 2 * b
+    if a <= 0 or pa <= 0:
+        return 4.0 * n
+    info = 1 / (a + tol) + 1 / a + 4 / pa  # each term is at its largest over [a, b]
+    return min(4.0 * n, 0.5 * math.sqrt(n * info))
+
+
+def interval_size_bound(n: int, tol: float, a: float, b: float, sa: float, sb: float) -> float:
+    """An upper bound on S over [a, b] from its values at the ends, the smaller of two rigorous bounds:
+    * S itself is Lipschitz with ``fisher_slope_bound``: max S <= (S(a) + S(b) + L (b - a)) / 2;
+    * theta = 2 arcsin(sqrt(S)) has |theta'| = |S'| / sqrt(S (1 - S)) <= sqrt(n I(g)) (since |S'| <= sqrt(n I S (1 - S))),
+      so max theta <= (theta(a) + theta(b) + sqrt(n I_max) (b - a)) / 2 and max S <= sin(max theta / 2)^2."""
+    s_bound = 0.5 * (sa + sb + fisher_slope_bound(n, tol, a, b) * (b - a))
+    pa = 1 - tol - 2 * b
+    if a <= 0 or pa <= 0:
+        return s_bound
+    info = 1 / (a + tol) + 1 / a + 4 / pa
+    ta, tb = 2 * math.asin(math.sqrt(min(max(sa, 0.0), 1.0))), 2 * math.asin(math.sqrt(min(max(sb, 0.0), 1.0)))
+    th = 0.5 * (ta + tb + math.sqrt(n * info) * (b - a))
+    t_bound = 1.0 if th >= math.pi else math.sin(th / 2) ** 2
+    return min(s_bound, t_bound)
+
+
+class _Band:
+    """Per grid point: the mass with Z < z_lo, and the sorted Z values in [z_lo, z_hi] with cumulative mass, so the
+    size at any z in [z_lo, z_hi] is one lookup."""
+
+    def __init__(self, n: int, tol: float, grid: np.ndarray, z_lo: float, z_hi: float):
+        self.z_lo, self.z_hi = z_lo, z_hi
+        self.rows = [self._row(n, tol, g) for g in grid]
+
+    def _row(self, n, tol, g):
+        z, w = _cells(n, tol, float(g))
+        below = float(w[z < self.z_lo].sum())
+        sel = (z >= self.z_lo) & (z <= self.z_hi)
+        o = np.argsort(z[sel], kind="stable")
+        return below, z[sel][o], np.cumsum(w[sel][o])
+
+    def add(self, n, tol, gs):
+        self.rows += [self._row(n, tol, g) for g in gs]
+
+    def sizes(self, zc: float) -> np.ndarray:
+        out = np.empty(len(self.rows))
+        for i, (below, zs, cw) in enumerate(self.rows):
+            j = int(np.searchsorted(zs, zc, side="right"))
+            out[i] = below + (cw[j - 1] if j else 0.0)
+        return out
+
+
+def exact_score_critical_v2(n: int, tol: float, alpha: float, per_unit: int = V2_PER_UNIT, margin: float = V2_MARGIN,
+                            max_rounds: int = 8, max_evals: int = 2_000_000) -> dict:
+    """The registered fix of candidate (ii)'s critical value, with a certificate that its size is at most alpha at
+    every nuisance value, on and off the grid.
+
+    1. Grid: ``nuisance_grid_v2`` (v1 grid + uniform spacing 1/(per_unit n)).
+    2. z* is the largest z (bisection to 1e-9) with the exact size at every grid point <= alpha - margin.
+    3. Certificate over the continuum [0, (1 - tol)/2): every interval between adjacent grid points is bounded by
+       ``interval_size_bound`` + slack (a Lipschitz bound from the Fisher information of the boundary curve); an
+       interval whose bound exceeds alpha is split at its midpoint (branch and bound). A point with S > alpha is added
+       to the grid and z* recomputed.
+    Returns z*, the grid size, the largest size found at any evaluated point, and the certified bound."""
+    z1 = exact_score_critical(n, tol, alpha)  # more nuisance points can only lower z*: z1 bounds it from above
+    z_hi, z_lo = z1 + 1e-9, z1 - 0.75
+    top = (1 - tol) / 2 * (1 - 1e-9)
+    grid = list(nuisance_grid_v2(n, tol, per_unit))
+    band = _Band(n, tol, np.array(grid), z_lo, z_hi)
+    rounds = []
+    for rnd in range(max_rounds):
+        lo, hi = z_lo, z_hi
+        if band.sizes(lo).max() > alpha - margin:
+            raise RuntimeError("z* is below the band; widen z_lo")
+        for _ in range(80):
+            mid = 0.5 * (lo + hi)
+            if band.sizes(mid).max() <= alpha - margin:
+                lo = mid
+            else:
+                hi = mid
+            if hi - lo < 1e-9:
+                break
+        z = lo
+        gs = np.array(grid)
+        order = np.argsort(gs)
+        gs = gs[order]
+        sz = band.sizes(z)[order]
+        # ---- branch and bound over every interval of the grid
+        evals, worst_bound, worst_found, found_over = 0, 0.0, float(sz.max()), []
+        stack = [(float(gs[i]), float(gs[i + 1]), float(sz[i]), float(sz[i + 1])) for i in range(len(gs) - 1)]
+        if gs[-1] < top:
+            stack.append((float(gs[-1]), top, float(sz[-1]), size_point(n, tol, z, top)))
+        certified_intervals = 0
+        while stack:
+            a, b, sa, sb = stack.pop()
+            bound = interval_size_bound(n, tol, a, b, sa, sb) + V2_WINDOW_SLACK
+            if bound <= alpha:
+                certified_intervals += 1
+                worst_bound = max(worst_bound, bound)
+                continue
+            m = 0.5 * (a + b)
+            if m <= a or m >= b:
+                raise RuntimeError(f"interval [{a}, {b}] cannot be split further")
+            sm = size_point(n, tol, z, m)
+            evals += 1
+            worst_found = max(worst_found, sm)
+            if sm > alpha:
+                found_over.append(m)
+                continue
+            if evals > max_evals:
+                raise RuntimeError("certificate budget exhausted")
+            stack += [(a, m, sa, sm), (m, b, sm, sb)]
+        rounds.append({"round": rnd, "z": z, "grid_points": len(grid), "grid_max_size": float(sz.max()),
+                       "bnb_evaluations": evals, "certified_intervals": certified_intervals,
+                       "points_over_alpha": len(found_over), "largest_size_found": worst_found,
+                       "certified_sup_bound": worst_bound})
+        if not found_over:
+            return {"n": n, "tol": tol, "alpha": alpha, "z": z, "z_v1": z1, "per_unit": per_unit, "margin": margin,
+                    "grid_points": len(grid), "grid_max_size": float(sz.max()), "largest_size_found": worst_found,
+                    "certified_sup_bound": worst_bound, "certified": True, "rounds": rounds}
+        grid += found_over
+        band.add(n, tol, found_over)
+    raise RuntimeError(f"no certified critical value after {max_rounds} rounds")
+
+
+@lru_cache(maxsize=64)
+def exact_score_critical_v2_z(n: int, tol: float, alpha: float) -> float:
+    return float(exact_score_critical_v2(n, tol, alpha)["z"])
+
+
+def exact_score_v2_region(n: int, kp, km, alpha: float, tol: float) -> np.ndarray:
+    return score_z(n, kp, km, tol) <= exact_score_critical_v2_z(n, float(tol), float(alpha))
 
 
 def exact_score_certifies(n: int, kp: int, km: int, alpha: float, tol: float) -> bool:

@@ -187,6 +187,48 @@ and reproduced here.
 **Test:** `tests/test_bounds.py::test_exact_score_size_off_the_nuisance_grid_at_n_3000` records the excess, its size
 (< 2 × 10⁻⁵) and the size within q = 4–15 % (≤ α).
 
+**Note, 2026-11-27: the registered fix of candidate (ii) (grid v2).**
+
+**Context.** This is the fix the note of 2026-11-25 requires before candidate (ii) is used in a confirmatory analysis.
+It was made for the draft of study 2 ([`study2_plan_DRAFT.md`](study2_plan_DRAFT.md)). Details and run files:
+[`study2_groundwork.md`](study2_groundwork.md) P4.
+
+**The fix:** a refined grid, plus a check off the grid that is a proof.
+* `capprune/bounds.py::exact_score_critical_v2`:
+  * **Grid:** the v1 grid, plus a uniform grid of spacing 1/(8n) in p⁻ over [0, (1 − tol)/2).
+  * **Critical value:** z\* is the largest z (bisection to 10⁻⁹) at which the exact size is ≤ α − 10⁻⁴ at every grid
+    point.
+  * **Check off the grid:** on the boundary, S(g) = P_g(Z ≤ z\*) satisfies |S′| ≤ √(n I(g) S(1 − S)), with
+    I(g) = 1/(g + tol) + 1/g + 4/(1 − tol − 2g). So S and 2 arcsin √S are Lipschitz on each interval. A branch and
+    bound over every grid interval bounds the size from the interval's end values, and splits until the bound is ≤ α.
+  * **If a point above α is found,** it joins the grid and z\* is recomputed. None was found.
+* The Berger–Boos alternative was not used: with z\* near −1.65 the full-range test is barely conservative, so
+  restricting the range would gain little and would cost γ.
+
+**Result.** At n = 1,254, 3,000, 3,500 and 3,600 and limits of 2 and 3 points (α = 0.05), the size of the fixed test is
+**proved ≤ 0.05 at every nuisance value**, on and off the grid. An independent check at 3,000 seeded random nuisance
+values agrees. Run file: `~/cap-prune-runs/study2-groundwork/exact_test.json`.
+
+**v1 is invalid at more places than the note of 2026-11-25 says.** The same independent check with the v1 critical
+values finds:
+* n = 1,254, 3 points: 0.050179 at 99.9 % disagreement;
+* n = 3,000, 2 points: 0.050039;
+* n = 3,000, 3 points: 0.050007 (the documented excess);
+* n = 3,500, 3 points: 0.050003.
+
+All of these are at 98–100 % disagreement. v2 changes z\* only in those four cases.
+
+**Consequences.**
+* §3's and §7's verdicts are unchanged: the validity grid of §3 does not reach those disagreement rates.
+* bound-dev was not rerun, and `simulation.json` and `real_data.json` are unchanged.
+* The v1 functions stay in the code because bound-dev's recorded results used them.
+* Any confirmatory use of candidate (ii) uses v2 (`exact_score_v2_region`).
+
+**Tests:** in `tests/test_study2_groundwork.py`:
+* v2 is certified, and its size at random points off the grid is ≤ α (n = 300, both limits);
+* the slope bound holds against finite differences;
+* the v1 excess at n = 3,000 is gone with v2.
+
 ## 9. What this is not
 
 * This is not a claim about either model and not part of the confirmatory study.
