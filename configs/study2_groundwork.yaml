@@ -1,0 +1,57 @@
+# Study 2 groundwork: EXPLORATORY (docs/study2_groundwork.md). No model is scored on any benchmark item, no model is
+# sealed, nothing is registered. GPU work: Wanda pruning, C4 validation perplexity and scoring-shaped forward passes
+# on C4 text, on the two feasibility models at their pinned revisions.
+#
+#   python -m capprune groundwork wanda-speed --config configs/study2_groundwork.yaml --model qwen3-1.7b   # GPU
+#   python -m capprune groundwork wanda-speed --config configs/study2_groundwork.yaml --model qwen3-8b     # GPU
+#   python -m capprune groundwork memory      --config configs/study2_groundwork.yaml                      # CPU
+#   python -m capprune groundwork exact-test  --config configs/study2_groundwork.yaml                      # CPU
+#   python -m capprune groundwork letters     --config configs/study2_groundwork.yaml                      # CPU
+#   python -m capprune groundwork candidates  --config configs/study2_groundwork.yaml                      # Hub metadata
+extends: unstructured_feasibility.yaml
+
+groundwork:
+  out_dir: ~/cap-prune-runs/study2-groundwork
+  checks:                        # in order; every check after the first restores the dense weights from disk first
+    qwen3-1.7b:
+      - {level: 0.05, method: original}                               # control: the feasibility code path, re-timed
+      - {level: 0.05, method: cached}
+      - {level: 0.30, method: cached, ppl: true, score_proxy: true}
+    qwen3-8b:
+      - {level: 0.05, method: cached}
+      - {level: 0.30, method: cached, ppl: true, score_proxy: true}    # also checks the restore on the large model
+  score_proxy_shapes: [[16, 2048], [32, 1024], [64, 512], [128, 256]]   # 32,768 tokens: the scorer's batch budget
+  exact_test:                    # P4, data-free: the registered fix of candidate (ii) (bounds.exact_score_critical_v2)
+    n: [1254, 3000, 3500, 3600]  # the feasibility Social Sciences n and the confirmation-set category sizes
+    tolerances: [0.02, 0.03]
+    alpha: 0.05
+    check_seed: 20261127
+    workers: 8
+  candidates:                    # P6: Hub metadata only (config.json and README.md are read; no weights)
+    ladder: [Qwen/Qwen3-4B, Qwen/Qwen3-8B, Qwen/Qwen3-14B]
+    second_family:
+      - meta-llama/Llama-3.1-8B-Instruct
+      - meta-llama/Llama-3.1-8B
+      - google/gemma-2-9b-it
+      - allenai/Olmo-3-7B-Instruct
+      - allenai/OLMo-2-1124-7B-Instruct
+      - mistralai/Mistral-7B-Instruct-v0.3
+      - mistralai/Ministral-8B-Instruct-2410
+      - ibm-granite/granite-3.3-8b-instruct
+      - tiiuae/Falcon3-7B-Instruct
+      - internlm/internlm3-8b-instruct
+  power:                         # planning only: the feasibility outcomes resampled to the confirmation-set sizes
+    models: [qwen3-8b, qwen3-1.7b]
+    confirmation_n: {STEM: 3600, Humanities: 3000, Social Sciences: 3000, Other: 3500}
+    size_multipliers: [0.5, 1.0, 2.0]
+    reps: 4000
+    seed: 20261128
+    alpha: 0.05
+    tolerance: 0.03
+  accounting:                    # planning only: zeroed share of all parameters at each study-2 grid level
+    levels: [0.05, 0.10, 0.15, 0.175, 0.20, 0.225, 0.25, 0.275, 0.30, 0.325, 0.35, 0.40]
+    models: [Qwen/Qwen3-4B, Qwen/Qwen3-8B, Qwen/Qwen3-14B, meta-llama/Llama-3.1-8B-Instruct, allenai/Olmo-3-7B-Instruct,
+             mistralai/Mistral-7B-Instruct-v0.3, ibm-granite/granite-3.3-8b-instruct, google/gemma-2-9b-it]
+    published_architectures:     # Llama-3.1-8B-Instruct config.json (gated): the values its model card and paper state
+      meta-llama/Llama-3.1-8B-Instruct: {vocab_size: 128256, hidden_size: 4096, intermediate_size: 14336, num_hidden_layers: 32,
+                                         num_attention_heads: 32, num_key_value_heads: 8, tie_word_embeddings: false}

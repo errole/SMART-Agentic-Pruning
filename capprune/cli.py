@@ -33,6 +33,8 @@
                     compare | after-rejection, tv-posthoc (post hoc)
   unstructured      EXPLORATORY uniform unstructured Wanda on Qwen3-1.7B and Qwen3-8B: attainability | models |
                     build-eval | run | analyze
+  groundwork        EXPLORATORY study 2 groundwork (no benchmark item scored): wanda-speed | memory | exact-test |
+                    letters | candidates | power | accounting
   results-index     one index of every experiment: configs, code hashes, commit, reports, headline numbers
   backup            zip the runs root with a per-file SHA-256 manifest and copy it to verified destinations
                     (the live run itself: `supervise` with a `kind: ranked_search` method)
@@ -475,6 +477,24 @@ def cmd_unstructured(args) -> int:
     return 0
 
 
+def cmd_groundwork(args) -> int:
+    from . import study2_groundwork as g
+    from .utils.log import setup_logging
+
+    setup_logging()
+    cfg = _cfg(args)
+    if args.phase == "wanda-speed" and not args.model:
+        raise SystemExit("groundwork wanda-speed needs --model")
+    p = {"wanda-speed": lambda: g.wanda_speed(cfg, args.model), "memory": lambda: g.memory(cfg),
+         "exact-test": lambda: g.exact_test(cfg), "letters": lambda: g.letters(cfg),
+         "candidates": lambda: g.candidates(cfg), "power": lambda: g.power(cfg),
+         "accounting": lambda: g.accounting_grid(cfg)}[args.phase]()
+    if p.suffix == ".md":
+        print(p.read_text(encoding="utf-8"))
+    print(f"\nwritten: {p}")
+    return 0
+
+
 def cmd_paper_a(args) -> int:
     from .paper_a import build
 
@@ -618,6 +638,11 @@ def main(argv=None) -> int:
     p.add_argument("phase", choices=["attainability", "models", "build-eval", "run", "analyze"])
     p.add_argument("--model", choices=["qwen3-1.7b", "qwen3-8b"])
     p.set_defaults(fn=cmd_unstructured)
+    p = sub.add_parser("groundwork", help="EXPLORATORY: study 2 groundwork, no benchmark item is scored "
+                                          "(docs/study2_groundwork.md)"); common(p)
+    p.add_argument("phase", choices=["wanda-speed", "memory", "exact-test", "letters", "candidates", "power", "accounting"])
+    p.add_argument("--model", choices=["qwen3-1.7b", "qwen3-8b"])
+    p.set_defaults(fn=cmd_groundwork)
     p = sub.add_parser("paper-a", help="paper A figures and tables from run files (matplotlib)"); common(p)
     p.add_argument("--out", default="docs/paper/workshop")
     p.set_defaults(fn=cmd_paper_a)
