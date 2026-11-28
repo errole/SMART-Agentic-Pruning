@@ -297,7 +297,7 @@ def mask_stats(state, units, s: float, total_params: int) -> dict:
         z = int((~m).sum().item())
         zeroed += z
         prunable += m.numel()
-        nonzero_masked += int((u.weight.detach()[~m] != 0).sum().item())
+        nonzero_masked += int((u.weight.detach()[~m.to(u.weight.device)] != 0).sum().item())  # masks may be on the CPU
         pk = per_kind.setdefault(u.kind, [0, 0])
         pk[0] += z
         pk[1] += m.numel()
