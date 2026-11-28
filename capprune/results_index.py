@@ -324,7 +324,21 @@ def _compensation(root: Path, folder: str) -> list[str]:
     return out
 
 
-EXTRACTORS = {"confirmatory": _confirmatory, "confirmatory_study": _confirmatory_study, "exploratory": _exploratory, "bound_dev": _bound_dev, "compensation": _compensation, "kl_probe_smoke": _kl_probe_smoke, "population_regate": _population_regate, "pool_signals": _pool_signals, "screen_confirm": _screen_confirm,
+def _unstructured(root: Path, folder: str) -> list[str]:
+    A = _opt(root / folder / "analysis" / "analysis.json")
+    out = ["EXPLORATORY (Qwen3-1.7B: seen items; Qwen3-8B: its screening pool, sealed set unopened)"]
+    if A:
+        for k, m in A["models"].items():
+            if m:
+                cr = m["confirmation_rule"]
+                out.append(f"{k}: reach {m['reach_levels']} level(s) = {100 * m['reach_share']:.2f} % of all parameters; "
+                           f"confirmation rule on this set (not a certificate): {cr['claim'] or 'none'} "
+                           f"({100 * cr['claim_share']:.2f} %)")
+        out.append(f"verdict on Qwen3-8B: {A['verdict']} (GO: reach >= 20 % of all parameters; NO-GO: < 10 %)")
+    return out
+
+
+EXTRACTORS = {"confirmatory": _confirmatory, "confirmatory_study": _confirmatory_study, "exploratory": _exploratory, "bound_dev": _bound_dev, "compensation": _compensation, "unstructured": _unstructured, "kl_probe_smoke": _kl_probe_smoke, "population_regate": _population_regate, "pool_signals": _pool_signals, "screen_confirm": _screen_confirm,
               "matched_signals": _matched_signals, "matched_signals_ordinary": _matched_signals_ordinary, "search_runs": _search_runs, "ranked_run": _ranked_run, "boundary": _boundary, "compare": _compare,
               "ranker": _ranker, "fixed_state": _fixed_state, "gap": _gap, "adaptive_replay": _adaptive_replay,
               "gate_design": _gate_design}
